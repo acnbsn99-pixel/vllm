@@ -3,6 +3,17 @@
 
 """Offline SpecSteer example with per-request draft prompts (greedy only).
 
+SpecSteer deploy checklist (rapid rollout):
+- `speculative_config` required fields: `method="specsteer"`, `model`,
+  `num_speculative_tokens`.
+- Greedy-only path: use `SamplingParams(temperature=0, ...)`.
+- `base_model`: omit/`None` to use the target `--model`; set a distinct model
+  only when draft scoring should be anchored to another base model.
+- `draft_prompt`: per-request steering text; if omitted, defaults to that
+  request's `prompt`.
+- Current support scope: offline `LLM.generate` examples only (not server API
+  path yet).
+
 Usage:
   python examples/offline_inference/specsteer_draft_prompt.py \
     --model meta-llama/Llama-3.2-1B-Instruct \
