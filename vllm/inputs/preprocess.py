@@ -156,6 +156,15 @@ class InputPreprocessor:
         if cache_salt := parsed_content.get("cache_salt"):
             inputs["cache_salt"] = cache_salt
 
+        draft_prompt_token_ids = parsed_content.get("draft_prompt_token_ids")
+        if draft_prompt_token_ids is None:
+            inputs["draft_prompt_token_ids"] = prompt_token_ids
+        else:
+            inputs["draft_prompt_token_ids"] = self._truncate_inputs(
+                draft_prompt_token_ids,
+                tokenization_kwargs,
+            )
+
         return inputs
 
     def _process_text(
@@ -184,6 +193,15 @@ class InputPreprocessor:
 
         if cache_salt := parsed_content.get("cache_salt"):
             inputs["cache_salt"] = cache_salt
+
+        draft_prompt = parsed_content.get("draft_prompt")
+        if draft_prompt is None:
+            inputs["draft_prompt_token_ids"] = inputs["prompt_token_ids"]
+        else:
+            inputs["draft_prompt_token_ids"] = self._tokenize_prompt(
+                draft_prompt,
+                tokenization_kwargs=tokenization_kwargs,
+            )
 
         return inputs
 
@@ -228,7 +246,10 @@ class InputPreprocessor:
             return self._process_embeds(prompt)  # type: ignore[arg-type]
 
         if "prompt_token_ids" in prompt:
-            return self._process_tokens(prompt)  # type: ignore[arg-type]
+            return self._process_tokens(  # type: ignore[arg-type]
+                prompt,
+                tokenization_kwargs=tokenization_kwargs,
+            )
 
         if "prompt" in prompt:
             return self._process_text(

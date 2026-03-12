@@ -1114,6 +1114,7 @@ class GPUModelRunner(
             req_state = CachedRequestState(
                 req_id=req_id,
                 prompt_token_ids=new_req_data.prompt_token_ids,
+                draft_prompt_token_ids=new_req_data.draft_prompt_token_ids,
                 prompt_embeds=new_req_data.prompt_embeds,
                 mm_features=new_req_data.mm_features,
                 sampling_params=sampling_params,
@@ -1393,6 +1394,7 @@ class GPUModelRunner(
         req_state = self.requests[req_id]
 
         req_state.prompt_token_ids = new_req_data.prompt_token_ids
+        req_state.draft_prompt_token_ids = new_req_data.draft_prompt_token_ids
         req_state.mm_features = new_req_data.mm_features
         req_state.prompt_embeds = new_req_data.prompt_embeds
         req_state.sampling_params = new_req_data.sampling_params

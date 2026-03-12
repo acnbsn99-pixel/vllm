@@ -61,12 +61,18 @@ class TextPrompt(_PromptOptions):
     prompt: str
     """The input text to be tokenized before passing to the model."""
 
+    draft_prompt: NotRequired[str]
+    """Optional text draft prompt to be tokenized for draft-prefix features."""
+
 
 class TokensPrompt(_PromptOptions):
     """Schema for a tokenized prompt."""
 
     prompt_token_ids: list[int]
     """A list of token IDs to pass to the model."""
+
+    draft_prompt_token_ids: NotRequired[list[int]]
+    """Optional token IDs used for draft-prefix features."""
 
     prompt: NotRequired[str]
     """The prompt text corresponding to the token IDs, if available."""
@@ -205,6 +211,9 @@ class TokenInputs(_InputOptions):
 
     prompt: NotRequired[str]
     """The prompt text corresponding to the token IDs, if available."""
+
+    draft_prompt_token_ids: NotRequired[list[int]]
+    """Optional token IDs used for draft-prefix features."""
 
 
 def token_inputs(
