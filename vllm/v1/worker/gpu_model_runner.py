@@ -171,6 +171,7 @@ from vllm.v1.spec_decode.ngram_proposer_gpu import (
     update_ngram_gpu_tensors_incremental,
     update_scheduler_for_invalid_drafts,
 )
+from vllm.v1.spec_decode.specsteer import SpecSteerProposer, SpecSteerSampler
 from vllm.v1.spec_decode.suffix_decoding import SuffixDecodingProposer
 from vllm.v1.structured_output.utils import apply_grammar_bitmask
 from vllm.v1.utils import CpuGpuBuffer, record_function_or_nullcontext
@@ -510,6 +511,7 @@ class GPUModelRunner(
                 | SuffixDecodingProposer
                 | EagleProposer
                 | DraftModelProposer
+                | SpecSteerProposer
                 | MedusaProposer
                 | ExtractHiddenStatesProposer
             )
@@ -517,6 +519,12 @@ class GPUModelRunner(
                 from vllm.v1.spec_decode.ngram_proposer import NgramProposer
 
                 self.drafter = NgramProposer(self.vllm_config)
+            elif self.speculative_config.uses_specsteer():
+                self.drafter = SpecSteerProposer(
+                    vllm_config=self.vllm_config,
+                    device=self.device,
+                    runner=self,
+                )
             elif self.speculative_config.uses_draft_model():
                 self.drafter = DraftModelProposer(
                     vllm_config=self.vllm_config,
@@ -562,7 +570,12 @@ class GPUModelRunner(
                     "Unknown speculative decoding method: "
                     f"{self.speculative_config.method}"
                 )
-            self.rejection_sampler = RejectionSampler(self.sampler)
+            if self.speculative_config.uses_specsteer():
+                self.spec_decode_sampler = SpecSteerSampler(
+                    self.sampler, self.speculative_config
+                )
+            else:
+                self.spec_decode_sampler = RejectionSampler(self.sampler)
 
         self.num_spec_tokens = 0
         if self.speculative_config:
@@ -3105,7 +3118,7 @@ class GPUModelRunner(
             draft_token_ids_cpu, _ = self._get_draft_token_ids_cpu()
             self.input_batch.update_async_spec_token_ids(draft_token_ids_cpu)
 
-        sampler_output = self.rejection_sampler(
+        sampler_output = self.spec_decode_sampler(
             spec_decode_metadata,
             None,  # draft_probs
             logits,
@@ -3956,6 +3969,7 @@ class GPUModelRunner(
             use_gpu_toks = (
                 spec_config.use_eagle()
                 or spec_config.uses_draft_model()
+                or spec_config.uses_specsteer()
                 or spec_config.uses_extract_hidden_states()
             ) and not spec_config.disable_padded_drafter_batch
             if use_gpu_toks:
@@ -3963,7 +3977,10 @@ class GPUModelRunner(
                 # as inputs, and does not need to wait for bookkeeping to finish.
                 assert isinstance(
                     self.drafter,
-                    EagleProposer | DraftModelProposer | ExtractHiddenStatesProposer,
+                    EagleProposer
+                    | DraftModelProposer
+                    | SpecSteerProposer
+                    | ExtractHiddenStatesProposer,
                 )
                 sampled_token_ids = sampler_output.sampled_token_ids
                 if input_fits_in_drafter:
@@ -4367,8 +4384,15 @@ class GPUModelRunner(
                 next_token_ids, valid_sampled_tokens_count
             )
 
-        elif spec_config.use_eagle() or spec_config.uses_draft_model():
-            assert isinstance(self.drafter, EagleProposer | DraftModelProposer)
+        elif (
+            spec_config.use_eagle()
+            or spec_config.uses_draft_model()
+            or spec_config.uses_specsteer()
+        ):
+            assert isinstance(
+                self.drafter,
+                EagleProposer | DraftModelProposer | SpecSteerProposer,
+            )
 
             if spec_config.disable_padded_drafter_batch:
                 # When padded-batch is disabled, the sampled_token_ids should be
@@ -5241,11 +5265,15 @@ class GPUModelRunner(
             if self.speculative_config and (
                 self.speculative_config.use_eagle()
                 or self.speculative_config.uses_draft_model()
+                or self.speculative_config.uses_specsteer()
                 or self.speculative_config.uses_extract_hidden_states()
             ):
                 assert isinstance(
                     self.drafter,
-                    EagleProposer | DraftModelProposer | ExtractHiddenStatesProposer,
+                    EagleProposer
+                    | DraftModelProposer
+                    | SpecSteerProposer
+                    | ExtractHiddenStatesProposer,
                 )
                 assert self.speculative_config is not None
                 # Eagle currently only supports PIECEWISE cudagraphs.
@@ -5377,7 +5405,7 @@ class GPUModelRunner(
                 device=self.device,
                 dtype=logits.dtype,
             )
-            self.rejection_sampler(
+            self.spec_decode_sampler(
                 dummy_spec_decode_metadata,
                 draft_probs,
                 logits,
@@ -5961,8 +5989,12 @@ class GPUModelRunner(
         if self.speculative_config and (
             self.speculative_config.use_eagle()
             or self.speculative_config.uses_draft_model()
+            or self.speculative_config.uses_specsteer()
         ):
-            assert isinstance(self.drafter, EagleProposer | DraftModelProposer)
+            assert isinstance(
+                self.drafter,
+                EagleProposer | DraftModelProposer | SpecSteerProposer,
+            )
             self.drafter.initialize_attn_backend(kv_cache_config, kernel_block_sizes)
 
     def _check_and_update_cudagraph_mode(
