@@ -1037,6 +1037,12 @@ class GPUModelRunner(
 
         self.num_sms = num_compute_units(self.device.index)
 
+    def _on_request_removed_from_batch(self, req_id: str) -> None:
+        if self.speculative_config and hasattr(self, "drafter"):
+            on_remove = getattr(self.drafter, "on_request_removed", None)
+            if callable(on_remove):
+                on_remove(req_id)
+
     # Note: used for model runner override.
     def _sync_device(self) -> None:
         torch.accelerator.synchronize()
@@ -1066,6 +1072,7 @@ class GPUModelRunner(
         # and handling the second as a new request.
         for req_id in scheduler_output.finished_req_ids:
             self.input_batch.remove_request(req_id)
+            self._on_request_removed_from_batch(req_id)
 
         # Zero GPU memory for freshly allocated cache blocks to prevent
         # stale NaN/data from corrupting attention or SSM computation.
@@ -1097,6 +1104,7 @@ class GPUModelRunner(
         # sets of requests), this optimization becomes very inefficient.
         for req_id in unscheduled_req_ids:
             self.input_batch.remove_request(req_id)
+            self._on_request_removed_from_batch(req_id)
 
         is_ngram_gpu = (
             self.speculative_config is not None
@@ -1416,6 +1424,7 @@ class GPUModelRunner(
         previously generated but now are input context (part of the prompt).
         """
         self.input_batch.remove_request(req_id)
+        self._on_request_removed_from_batch(req_id)
         req_state = self.requests[req_id]
 
         req_state.prompt_token_ids = new_req_data.prompt_token_ids

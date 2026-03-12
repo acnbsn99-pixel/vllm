@@ -37,6 +37,13 @@ class SpecSteerProposer(DraftModelProposer):
             generated = req_state.output_token_ids
         return list(generated)
 
+    def _get_drafter_prefix(self, req_state: CachedRequestState) -> list[int]:
+        return self._get_prompt_for_drafting(req_state)
+
+    def on_request_removed(self, req_id: str) -> None:
+        self._logical_streams.pop(req_id, None)
+        self._accepted_prefix_lens.pop(req_id, None)
+
     def _sync_logical_stream(
         self, requests: dict[str, CachedRequestState], gpu_input_batch: InputBatch
     ) -> None:
@@ -75,6 +82,16 @@ class SpecSteerProposer(DraftModelProposer):
 
         self._step_logits.append(logits)
         return next_token_ids
+
+    def prepare_next_token_ids_cpu(self, *args, **kwargs) -> torch.Tensor:
+        assert self.runner is not None
+        self._sync_logical_stream(self.runner.requests, self.runner.input_batch)
+        return super().prepare_next_token_ids_cpu(*args, **kwargs)
+
+    def prepare_next_token_ids_padded(self, *args, **kwargs):
+        assert self.runner is not None
+        self._sync_logical_stream(self.runner.requests, self.runner.input_batch)
+        return super().prepare_next_token_ids_padded(*args, **kwargs)
 
     def propose(self, *args, **kwargs) -> tuple[torch.Tensor, torch.Tensor]:
         assert self.runner is not None

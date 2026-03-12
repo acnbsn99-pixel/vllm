@@ -786,6 +786,24 @@ class SpecDecodeBaseProposer:
     def model_returns_tuple(self) -> bool:
         return self.method not in ("mtp", "draft_model")
 
+    def on_request_removed(self, req_id: str) -> None:
+        """Hook invoked when a request leaves the persistent draft batch."""
+
+    def _get_drafter_prefix(self, req_state: CachedRequestState) -> list[int]:
+        """Token prefix used by the drafter for fallback token lookup."""
+        return list(req_state.prompt_token_ids or [])
+
+    def _get_drafter_token_id(self, req_state: CachedRequestState, idx: int) -> int:
+        """Return token id at a logical index in the drafter input stream."""
+        prefix = self._get_drafter_prefix(req_state)
+        if idx < len(prefix):
+            return prefix[idx]
+
+        output_idx = idx - len(prefix)
+        if output_idx < len(req_state.output_token_ids):
+            return req_state.output_token_ids[output_idx]
+        return -1
+
     def prepare_next_token_ids_cpu(
         self,
         sampled_token_ids: list[list[int]],
@@ -812,7 +830,7 @@ class SpecDecodeBaseProposer:
                 req_id = req_ids[i]
                 req_state = requests[req_id]
                 seq_len = req_state.num_computed_tokens + num_scheduled_tokens[req_id]
-                next_token_id = req_state.get_token_id(seq_len)
+                next_token_id = self._get_drafter_token_id(req_state, seq_len)
             next_token_ids.append(next_token_id)
         next_token_ids = torch.tensor(
             next_token_ids, dtype=torch.int32, device=self.input_ids.device
@@ -838,8 +856,9 @@ class SpecDecodeBaseProposer:
         num_reqs = gpu_input_batch.num_reqs
         self.backup_next_token_ids.np[:num_reqs] = np.array(
             [
-                requests[gpu_input_batch.req_ids[i]].get_token_id(
-                    common_attn_metadata.seq_lens_cpu[i].item()
+                self._get_drafter_token_id(
+                    requests[gpu_input_batch.req_ids[i]],
+                    common_attn_metadata.seq_lens_cpu[i].item(),
                 )
                 for i in range(num_reqs)
             ],
