@@ -53,6 +53,7 @@ SpeculativeMethod = Literal[
     "medusa",
     "mlp_speculator",
     "draft_model",
+    "specsteer",
     "suffix",
     EagleModelTypes,
     NgramGPUTypes,
@@ -180,6 +181,20 @@ class SpeculativeConfig:
     or probabilistic rejection sampling. Both respect the target model
     distribution, but the latter yields a higher acceptance rate at the cost
     of more memory to cache draft logits."""
+
+    # SpecSteer configuration
+    base_model: str | None = None
+    gamma: float = 1.0
+    eps: float = 1e-8
+    fusion_method: str = "costeer"
+    T: int = 20
+    alpha: float = 2.0
+    beta: float = 1.0
+    player_lambda: float = 2.0
+    eta: float = 10.0
+    fusion_coeff: float = 1.0
+    vocab_align_method: str = "pad_truncate"
+    specsteer_enable_bonus_token: bool = False
 
     def compute_hash(self) -> str:
         """
@@ -360,6 +375,16 @@ class SpeculativeConfig:
             )
             self.method = "mtp"
 
+        if self.method == "specsteer":
+            if self.model is None:
+                raise ValueError(
+                    "specsteer requires `model` to be provided."
+                )
+            if self.num_speculative_tokens is None:
+                raise ValueError(
+                    "specsteer requires `num_speculative_tokens` to be provided."
+                )
+
         if self.model is None and self.num_speculative_tokens is not None:
             if self.method == "mtp":
                 if self.target_model_config is None:
@@ -382,6 +407,11 @@ class SpeculativeConfig:
                 self.model = "suffix"
             elif self.method == "extract_hidden_states":
                 self.model = "extract_hidden_states"
+            elif self.method == "specsteer":
+                raise ValueError(
+                    "specsteer requires both `model` and "
+                    "`num_speculative_tokens` to be set."
+                )
             else:
                 raise ValueError(
                     "num_speculative_tokens was provided but without speculative model."
@@ -514,7 +544,7 @@ class SpeculativeConfig:
                             "one layer. Might need some code changes "
                             "to support multiple layers."
                         )
-                elif self.method == "draft_model":
+                elif self.method in ("draft_model", "specsteer"):
                     pass
                 else:
                     raise NotImplementedError(
@@ -847,6 +877,9 @@ class SpeculativeConfig:
 
     def uses_draft_model(self) -> bool:
         return self.method == "draft_model"
+
+    def uses_specsteer(self) -> bool:
+        return self.method == "specsteer"
 
     def uses_extract_hidden_states(self) -> bool:
         return self.method == "extract_hidden_states"
