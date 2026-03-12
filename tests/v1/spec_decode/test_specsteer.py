@@ -182,6 +182,36 @@ def test_spec_decode_smoke_e2e_defaults_draft_prompt_in_request_flow():
     assert len(outputs[0].outputs[0].token_ids) > 0
 
 
+def test_spec_decode_smoke_e2e_mixed_draft_prompt_requests_greedy():
+    llm = LLM(
+        model="hmellor/tiny-random-LlamaForCausalLM",
+        enforce_eager=True,
+        speculative_config={
+            "method": "specsteer",
+            "model": "hmellor/tiny-random-LlamaForCausalLM",
+            "base_model": "hmellor/tiny-random-LlamaForCausalLM",
+            "num_speculative_tokens": 2,
+        },
+    )
+
+    outputs = llm.generate(
+        [
+            {
+                "prompt": "Give one noun.",
+                "draft_prompt": "Give one noun",
+            },
+            {
+                "prompt": "Give one verb.",
+            },
+        ],
+        SamplingParams(temperature=0, max_tokens=4),
+    )
+
+    assert len(outputs) == 2
+    assert all(output.outputs for output in outputs)
+    assert all(len(output.outputs[0].token_ids) > 0 for output in outputs)
+
+
 def test_spec_decode_smoke_e2e_rejects_non_greedy_sampling():
     llm = LLM(
         model="hmellor/tiny-random-LlamaForCausalLM",
