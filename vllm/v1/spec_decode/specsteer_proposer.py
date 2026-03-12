@@ -160,12 +160,34 @@ class SpecSteerProposer(DraftModelProposer):
         self._step_logits = []
         draft_token_ids = super().propose(*args, **kwargs)
 
-        # Flatten per-step logits to [num_tokens, vocab] so the sampler can index
-        # by cu_num_draft_tokens slices.
+        # Pack per-request recovery logits to [num_valid_draft_tokens, vocab]
+        # in request-major order. This matches SpecDecodeMetadata.draft_token_ids:
+        # rows are contiguous per request and only include valid draft positions.
         if self._step_logits:
-            augmented_logits = torch.stack(self._step_logits, dim=1).reshape(
-                -1, self._step_logits[0].shape[-1]
-            )
+            per_step_logits = torch.stack(self._step_logits, dim=1)
+            if per_step_logits.shape[:2] != draft_token_ids.shape:
+                raise ValueError(
+                    "SpecSteer proposer produced logits with shape "
+                    f"{tuple(per_step_logits.shape)} for draft_token_ids shape "
+                    f"{tuple(draft_token_ids.shape)}."
+                )
+
+            packed_logits: list[torch.Tensor] = []
+            valid_mask = draft_token_ids >= 0
+            for req_idx in range(draft_token_ids.shape[0]):
+                req_valid_positions = valid_mask[req_idx].nonzero(
+                    as_tuple=False
+                ).squeeze(-1)
+                if req_valid_positions.numel() == 0:
+                    continue
+                packed_logits.append(per_step_logits[req_idx, req_valid_positions])
+
+            if packed_logits:
+                augmented_logits = torch.cat(packed_logits, dim=0)
+            else:
+                augmented_logits = per_step_logits.new_empty(
+                    (0, per_step_logits.shape[-1])
+                )
         else:
             augmented_logits = torch.empty(
                 (0, self.model.config.vocab_size),

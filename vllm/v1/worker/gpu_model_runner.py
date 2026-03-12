@@ -4671,6 +4671,19 @@ class GPUModelRunner(
             if spec_config.use_specsteer():
                 assert isinstance(propose_output, tuple)
                 draft_token_ids, self.specsteer_augmented_logits = propose_output
+                if spec_decode_metadata is not None:
+                    expected_num_tokens = (
+                        int(spec_decode_metadata.cu_num_draft_tokens[-1])
+                        if spec_decode_metadata.cu_num_draft_tokens.numel() > 0
+                        else 0
+                    )
+                    actual_num_tokens = self.specsteer_augmented_logits.shape[0]
+                    assert actual_num_tokens == expected_num_tokens, (
+                        "SpecSteer metadata mismatch before sampling: "
+                        "draft_token_ids has "
+                        f"{actual_num_tokens} rows but "
+                        f"cu_num_draft_tokens[-1] is {expected_num_tokens}."
+                    )
                 self._set_specsteer_aux_logits(
                     steer_logits=self.specsteer_augmented_logits,
                     base_logits=self._run_specsteer_base_verifier_forward(
