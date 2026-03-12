@@ -421,10 +421,13 @@ class SpeculativeConfig:
             elif self.method == "extract_hidden_states":
                 self.model = "extract_hidden_states"
             elif self.method == "specsteer":
-                raise ValueError(
-                    "specsteer requires both `model` and "
-                    "`num_speculative_tokens` to be set."
-                )
+                if self.target_model_config is None:
+                    raise ValueError(
+                        "target_model_config must be present for specsteer"
+                    )
+                self.model = self.target_model_config.model
+                if not self.quantization:
+                    self.quantization = self.target_model_config.quantization
             else:
                 raise ValueError(
                     "num_speculative_tokens was provided but without speculative model."
@@ -879,7 +882,7 @@ class SpeculativeConfig:
         if self.parallel_drafting:
             # For parallel drafting, we need one new slot per 'masked' token
             slots_per_req = self.num_speculative_tokens - 1
-        if self.uses_draft_model():
+        if self.uses_draft_model() or self.use_specsteer():
             # For draft model-based speculation, we need one new slot per request
             # Since we do not slice the draft tokens
             slots_per_req += 1
@@ -892,6 +895,9 @@ class SpeculativeConfig:
         return self.method in ("draft_model", "specsteer")
 
     def uses_specsteer(self) -> bool:
+        return self.method == "specsteer"
+
+    def use_specsteer(self) -> bool:
         return self.method == "specsteer"
 
     def uses_extract_hidden_states(self) -> bool:
