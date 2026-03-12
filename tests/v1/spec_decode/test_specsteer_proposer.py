@@ -81,6 +81,52 @@ def test_update_accepted_draft_token_counts_trims_speculative_tail() -> None:
     assert proposer._accepted_prefix_lens["req-1"] == 5
 
 
+def test_update_accepted_draft_token_counts_keeps_committed_prefix_on_reject() -> None:
+    proposer = object.__new__(SpecSteerProposer)
+    proposer._logical_streams = {"req-1": [10, 11, 20, 21, 31, 32]}
+    proposer._accepted_prefix_lens = {"req-1": 4}
+
+    req_state = _make_req_state(
+        prompt_token_ids=[1],
+        draft_prompt_token_ids=[10, 11],
+        output_token_ids=[20, 21],
+    )
+    requests = {"req-1": req_state}
+
+    proposer.update_accepted_draft_token_counts(
+        requests,
+        ["req-1"],
+        torch.tensor([0], dtype=torch.int32),
+    )
+
+    # No draft tokens accepted -> keep only committed prefix.
+    assert proposer._logical_streams["req-1"] == [10, 11, 20, 21]
+    assert proposer._accepted_prefix_lens["req-1"] == 4
+
+
+def test_sync_logical_stream_drops_stale_speculative_tail() -> None:
+    proposer = object.__new__(SpecSteerProposer)
+    # Previous iteration appended speculative tokens [31, 32, 33].
+    proposer._logical_streams = {"req-1": [10, 11, 20, 21, 31, 32, 33]}
+    proposer._accepted_prefix_lens = {"req-1": 4}
+
+    req_state = _make_req_state(
+        prompt_token_ids=[1],
+        draft_prompt_token_ids=[10, 11],
+        output_token_ids=[20, 21],
+    )
+    requests = {"req-1": req_state}
+
+    class _Batch:
+        req_ids = ["req-1"]
+
+    proposer._sync_logical_stream(requests, _Batch())
+
+    # Next-step prefixes are rebuilt from committed prompt+output only.
+    assert proposer._logical_streams["req-1"] == [10, 11, 20, 21]
+    assert proposer._accepted_prefix_lens["req-1"] == 4
+
+
 def test_sync_logical_stream_resets_on_prompt_change() -> None:
     proposer = object.__new__(SpecSteerProposer)
     proposer._logical_streams = {"req-1": [10, 11, 20, 21, 31]}
