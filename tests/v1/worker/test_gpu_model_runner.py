@@ -1373,3 +1373,18 @@ def test_specsteer_verified_valid_counts_clamps_to_draft_len() -> None:
     )
 
     assert valid_counts.tolist() == [3, 1]
+
+
+def test_specsteer_verified_valid_counts_excludes_recovery_token() -> None:
+    # Verifier accepted counts can include the recovery token (+1).
+    # For the next speculative prepare step, only draft-token acceptance should
+    # survive, so values must be clamped to num_draft_tokens.
+    accepted_draft_counts = torch.tensor([4, 3], dtype=torch.int32)
+    num_draft_tokens = [3, 2]
+
+    valid_counts = GPUModelRunner._specsteer_verified_valid_counts(
+        accepted_draft_counts,
+        num_draft_tokens,
+    )
+
+    assert valid_counts.tolist() == [3, 2]
