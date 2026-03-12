@@ -4474,6 +4474,17 @@ class GPUModelRunner(
                 self.drafter, EagleProposer | DraftModelProposer | SpecSteerProposer
             )
 
+            if (
+                spec_config.use_specsteer()
+                and accepted_draft_token_counts is not None
+                and isinstance(self.drafter, SpecSteerProposer)
+            ):
+                self.drafter.update_accepted_draft_token_counts(
+                    self.requests,
+                    self.input_batch.req_ids,
+                    accepted_draft_token_counts,
+                )
+
             if spec_config.disable_padded_drafter_batch:
                 # When padded-batch is disabled, the sampled_token_ids should be
                 # the cpu-side list[list[int]] of valid sampled tokens for each

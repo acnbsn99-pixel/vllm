@@ -38,7 +38,40 @@ class SpecSteerProposer(DraftModelProposer):
         return list(generated)
 
     def _get_drafter_prefix(self, req_state: CachedRequestState) -> list[int]:
-        return self._get_prompt_for_drafting(req_state)
+        req_id = req_state.req_id
+        stream = self._logical_streams.get(req_id)
+        if stream is None:
+            return self._get_prompt_for_drafting(req_state)
+        return list(stream)
+
+    def update_accepted_draft_token_counts(
+        self,
+        requests: dict[str, CachedRequestState],
+        req_ids: list[str],
+        accepted_draft_token_counts: torch.Tensor,
+    ) -> None:
+        """Trim speculative tails to accepted prefixes from runner bookkeeping."""
+        if not req_ids:
+            return
+
+        accepted_counts = accepted_draft_token_counts.tolist()
+        for req_id, accepted_count in zip(req_ids, accepted_counts, strict=False):
+            req_state = requests.get(req_id)
+            if req_state is None:
+                self.on_request_removed(req_id)
+                continue
+
+            stream = self._logical_streams.get(req_id)
+            if stream is None:
+                continue
+
+            base_prefix_len = self._accepted_prefix_lens.get(req_id, 0)
+            accepted_prefix_len = max(
+                0,
+                min(base_prefix_len + int(accepted_count), len(stream)),
+            )
+            self._logical_streams[req_id] = stream[:accepted_prefix_len]
+            self._accepted_prefix_lens[req_id] = accepted_prefix_len
 
     def on_request_removed(self, req_id: str) -> None:
         self._logical_streams.pop(req_id, None)
@@ -58,16 +91,23 @@ class SpecSteerProposer(DraftModelProposer):
             req_state = requests[req_id]
             prompt = self._get_prompt_for_drafting(req_state)
             generated = self._get_generated_output(req_state)
-            stream = prompt + generated
+            committed_stream = prompt + generated
+            prev_stream = self._logical_streams.get(req_id)
 
-            # Never reuse stale speculative KV: keep only accepted prefix.
-            accepted_prefix_len = len(stream)
-            prev_accepted_prefix_len = self._accepted_prefix_lens.get(req_id, 0)
-            if accepted_prefix_len < prev_accepted_prefix_len:
-                self._logical_streams[req_id] = stream
+            # Preemption/resume or request mutation may rewrite the prompt/output.
+            # Reset to the committed stream in those cases.
+            if (
+                prev_stream is None
+                or len(prev_stream) < len(committed_stream)
+                or prev_stream[: len(committed_stream)] != committed_stream
+            ):
+                self._logical_streams[req_id] = committed_stream
             else:
-                self._logical_streams[req_id] = stream
-            self._accepted_prefix_lens[req_id] = accepted_prefix_len
+                # Keep only committed output; never reuse stale speculative tail.
+                self._logical_streams[req_id] = prev_stream[: len(committed_stream)]
+
+            # Next-step drafting always starts from draft_prompt + committed_output.
+            self._accepted_prefix_lens[req_id] = len(committed_stream)
 
     def _greedy_sample(self, hidden_states: torch.Tensor) -> torch.Tensor:
         """Greedy sample and record per-step logits for SpecSteer recovery."""
@@ -112,4 +152,15 @@ class SpecSteerProposer(DraftModelProposer):
                 dtype=torch.float32,
                 device=draft_token_ids.device,
             )
+
+        # Cache speculative continuation per request for next-step token lookup.
+        req_ids = self.runner.input_batch.req_ids
+        for req_idx, req_id in enumerate(req_ids):
+            base_stream = self._logical_streams.get(req_id)
+            if base_stream is None:
+                continue
+            row = draft_token_ids[req_idx]
+            drafted = row[row >= 0].tolist()
+            if drafted:
+                self._logical_streams[req_id] = base_stream + drafted
         return draft_token_ids, augmented_logits
