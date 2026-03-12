@@ -159,6 +159,7 @@ from vllm.v1.sample.logits_processor import LogitsProcessors, build_logitsprocs
 from vllm.v1.sample.logits_processor.interface import LogitsProcessor
 from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.rejection_sampler import RejectionSampler
+from vllm.v1.sample.specsteer_sampler import SpecSteerSampler
 from vllm.v1.sample.sampler import Sampler
 from vllm.v1.spec_decode.draft_model import DraftModelProposer
 from vllm.v1.spec_decode.eagle import EagleProposer
@@ -563,6 +564,7 @@ class GPUModelRunner(
                     f"{self.speculative_config.method}"
                 )
             self.rejection_sampler = RejectionSampler(self.sampler)
+            self.specsteer_sampler = SpecSteerSampler(self.sampler)
 
         self.num_spec_tokens = 0
         if self.speculative_config:
@@ -3096,6 +3098,17 @@ class GPUModelRunner(
         if spec_decode_metadata is None:
             return self.sampler(
                 logits=logits,
+                sampling_metadata=sampling_metadata,
+            )
+
+        if self.speculative_config and self.speculative_config.method == "specsteer":
+            base_logits = getattr(self, "_specsteer_base_logits", None)
+            steer_logits = getattr(self, "_specsteer_steer_logits", None)
+            return self.specsteer_sampler(
+                metadata=spec_decode_metadata,
+                logits=logits,
+                base_logits=base_logits,
+                steer_logits=steer_logits,
                 sampling_metadata=sampling_metadata,
             )
 
