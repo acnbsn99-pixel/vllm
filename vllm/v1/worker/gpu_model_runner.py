@@ -526,6 +526,7 @@ class GPUModelRunner(
                     vllm_config=self.vllm_config,
                     device=self.device,
                     runner=self,
+                    stream_role="augmented_drafter",
                 )
             elif self.speculative_config.uses_draft_model():
                 self.drafter = DraftModelProposer(
@@ -4688,6 +4689,7 @@ class GPUModelRunner(
                 vllm_config=self.vllm_config,
                 device=self.device,
                 runner=self,
+                stream_role="base_verifier",
             )
             self.specsteer_base_verifier.model = self.drafter.model
             return
@@ -4711,6 +4713,7 @@ class GPUModelRunner(
             vllm_config=base_vllm_config,
             device=self.device,
             runner=self,
+            stream_role="base_verifier",
         )
         self.specsteer_base_verifier.load_model(self.model)
 

@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from collections import defaultdict
+from typing import Literal
 
 import torch
 
@@ -19,22 +20,41 @@ class SpecSteerProposer(DraftModelProposer):
     and returns both drafted token ids and augmented per-token recovery logits.
     """
 
-    def __init__(self, vllm_config: VllmConfig, device: torch.device, runner=None):
+    def __init__(
+        self,
+        vllm_config: VllmConfig,
+        device: torch.device,
+        runner=None,
+        stream_role: Literal["augmented_drafter", "base_verifier"] = (
+            "augmented_drafter"
+        ),
+    ):
         super().__init__(vllm_config=vllm_config, device=device, runner=runner)
+        self.stream_role: Literal["augmented_drafter", "base_verifier"] = (
+            stream_role
+        )
         self._accepted_prefix_lens: dict[str, int] = defaultdict(int)
         self._logical_streams: dict[str, list[int]] = {}
         self._step_logits: list[torch.Tensor] = []
 
     def _get_prompt_for_drafting(self, req_state: CachedRequestState) -> list[int]:
-        prompt = getattr(req_state, "draft_prompt_token_ids", None)
-        if prompt is None:
+        if self.stream_role == "base_verifier":
+            # Base verifier must always track the canonical request prompt.
             prompt = req_state.prompt_token_ids
+        else:
+            prompt = getattr(req_state, "draft_prompt_token_ids", None)
+            if prompt is None:
+                prompt = req_state.prompt_token_ids
         return list(prompt or [])
 
     def _get_generated_output(self, req_state: CachedRequestState) -> list[int]:
-        generated = getattr(req_state, "generated_output", None)
-        if generated is None:
+        if self.stream_role == "base_verifier":
+            # Keep verifier logical state tied to the base stream only.
             generated = req_state.output_token_ids
+        else:
+            generated = getattr(req_state, "generated_output", None)
+            if generated is None:
+                generated = req_state.output_token_ids
         return list(generated)
 
     def _get_drafter_prefix(self, req_state: CachedRequestState) -> list[int]:
