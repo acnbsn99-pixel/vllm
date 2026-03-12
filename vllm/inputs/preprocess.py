@@ -158,7 +158,7 @@ class InputPreprocessor:
 
         draft_prompt_token_ids = parsed_content.get("draft_prompt_token_ids")
         if draft_prompt_token_ids is None:
-            inputs["draft_prompt_token_ids"] = prompt_token_ids
+            inputs["draft_prompt_token_ids"] = inputs["prompt_token_ids"]
         else:
             inputs["draft_prompt_token_ids"] = self._truncate_inputs(
                 draft_prompt_token_ids,

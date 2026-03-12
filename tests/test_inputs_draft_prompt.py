@@ -74,7 +74,8 @@ def test_process_tokens_multimodal_defaults_or_uses_draft_prompt_token_ids():
         "multi_modal_data": {"image": []},
     })
     assert without_draft["prompt_token_ids"] == [9, 8]
-    assert without_draft["draft_prompt_token_ids"] == [1, 2]
+    assert without_draft["draft_prompt_token_ids"] == [9, 8]
+    assert without_draft["draft_prompt_token_ids"] == without_draft["prompt_token_ids"]
 
     with_draft = pre._process_tokens({
         "prompt_token_ids": [1, 2],
