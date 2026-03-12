@@ -1,64 +1,55 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-"""Offline speculative steering example.
 
-This example demonstrates the shape of a SpecSteer request in the offline
-``LLM.generate`` API.
+"""Offline SpecSteer example (greedy-only).
 
-Required ``speculative_config`` keys for SpecSteer:
-* ``method``: must be ``"specsteer"``.
-* ``model``: draft/assistant model used by the speculative proposer.
-* ``num_speculative_tokens``: number of draft tokens to propose each step.
-
-Per-request ``draft_prompt`` behavior:
-* ``draft_prompt`` is passed inside each request object alongside ``prompt``.
-* ``draft_prompt`` is currently only demonstrated for the offline Python API.
-* OpenAI-compatible server endpoints do not currently accept a request-level
-  ``draft_prompt`` field.
+Usage:
+  python examples/offline_inference/specsteer.py \
+    --model meta-llama/Llama-3.2-1B-Instruct \
+    --draft-model meta-llama/Llama-3.2-1B-Instruct
 """
+
+import argparse
 
 from vllm import LLM, SamplingParams
 
-MODEL_NAME = "meta-llama/Llama-3.1-8B-Instruct"
-DRAFT_MODEL_NAME = "meta-llama/Llama-3.2-1B-Instruct"
-
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--model", required=True)
+    parser.add_argument("--draft-model", required=True)
+    parser.add_argument("--base-model", default=None)
+    parser.add_argument("--max-tokens", type=int, default=64)
+    args = parser.parse_args()
+
     llm = LLM(
-        model=MODEL_NAME,
+        model=args.model,
         speculative_config={
             "method": "specsteer",
-            "model": DRAFT_MODEL_NAME,
+            "model": args.draft_model,
+            "base_model": args.base_model,
             "num_speculative_tokens": 4,
+            "gamma": 0.6,
+            "eps": 1e-10,
+            "fusion_method": "costeer",
+            "specsteer_enable_bonus_token": False,
         },
     )
 
-    requests = [
-        {
-            "prompt": "Explain speculative decoding in one short paragraph.",
-            "draft_prompt": "Write a concise explanation focused on latency.",
-        },
-        {
-            "prompt": "List two practical benefits of request-level steering.",
-            "draft_prompt": "Prefer bullet points and mention controllability.",
-        },
-    ]
-
-    # Greedy decoding only.
-    sampling_params = SamplingParams(
-        temperature=0.0,
-        top_p=1.0,
-        top_k=1,
-        max_tokens=64,
+    outputs = llm.generate(
+        [
+            {
+                "prompt": "Describe speculative decoding in one paragraph.",
+                "draft_prompt": (
+                    "Give a concise, high-level, approximate draft for "
+                    "speculative decoding."
+                ),
+            }
+        ],
+        sampling_params=SamplingParams(temperature=0, max_tokens=args.max_tokens),
     )
 
-    outputs = llm.generate(requests, sampling_params=sampling_params)
-
-    for i, output in enumerate(outputs):
-        print(f"\n=== Request {i} ===")
-        print(f"Prompt: {requests[i]['prompt']}")
-        print(f"Draft prompt: {requests[i]['draft_prompt']}")
-        print(f"Output: {output.outputs[0].text}")
+    print(outputs[0].outputs[0].text)
 
 
 if __name__ == "__main__":
