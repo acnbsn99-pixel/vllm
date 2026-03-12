@@ -38,6 +38,7 @@ class NewRequestData:
     num_computed_tokens: int
     lora_request: LoRARequest | None
     prompt_embeds: "torch.Tensor | None" = None
+    draft_prompt_token_ids: list[int] | None = None
 
     # Only used for v2 model runner.
     prefill_token_ids: list[int] | None = None
@@ -52,6 +53,7 @@ class NewRequestData:
         return cls(
             req_id=request.request_id,
             prompt_token_ids=request.prompt_token_ids,
+            draft_prompt_token_ids=request.draft_prompt_token_ids,
             mm_features=request.mm_features,
             sampling_params=request.sampling_params,
             pooling_params=request.pooling_params,
@@ -70,6 +72,7 @@ class NewRequestData:
             f"NewRequestData("
             f"req_id={self.req_id},"
             f"prompt_token_ids={self.prompt_token_ids},"
+            f"draft_prompt_token_ids={self.draft_prompt_token_ids},"
             f"prefill_token_ids={self.prefill_token_ids},"
             f"mm_features={self.mm_features},"
             f"sampling_params={self.sampling_params},"
@@ -95,6 +98,8 @@ class NewRequestData:
             f"NewRequestData("
             f"req_id={self.req_id},"
             f"prompt_token_ids_len={prompt_token_ids_len},"
+            f"draft_prompt_token_ids_len="
+            f"{len(self.draft_prompt_token_ids) if self.draft_prompt_token_ids is not None else None},"
             f"prefill_token_ids_len={prefill_token_ids_len},"
             f"mm_features={self.mm_features},"
             f"sampling_params={self.sampling_params},"

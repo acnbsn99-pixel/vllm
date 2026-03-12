@@ -133,6 +133,12 @@ def parse_dec_only_prompt(prompt: PromptType | object) -> DecoderOnlyDictPrompt:
         if "encoder_prompt" in prompt:
             raise TypeError("Cannot pass encoder-decoder prompt to decoder-only models")
 
+        if "draft_prompt" in prompt and "prompt" not in prompt:
+            raise TypeError("Draft text prompt requires prompt text")
+
+        if "draft_prompt_token_ids" in prompt and "prompt_token_ids" not in prompt:
+            raise TypeError("Draft token prompt requires prompt_token_ids")
+
         if (
             "prompt" in prompt
             or "prompt_token_ids" in prompt
