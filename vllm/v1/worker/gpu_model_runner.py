@@ -3147,6 +3147,66 @@ class GPUModelRunner(
             ec_connector_output,
         )
 
+    def _validate_specsteer_sampling_inputs(
+        self,
+        logits: torch.Tensor | None,
+        metadata: SpecDecodeMetadata,
+    ) -> None:
+        if logits is None:
+            raise ValueError("SpecSteer requires logits to be present for sampling.")
+
+        specsteer_metadata = metadata.specsteer
+        if specsteer_metadata is None:
+            raise ValueError(
+                "SpecSteer sampler invoked without SpecSteer metadata payload."
+            )
+
+        num_tokens = int(specsteer_metadata.draft_token_ids.shape[0])
+        cu_num_draft_tokens = specsteer_metadata.cu_num_draft_tokens
+        expected_num_tokens = (
+            int(cu_num_draft_tokens[-1].item())
+            if cu_num_draft_tokens.numel() > 0
+            else 0
+        )
+        if expected_num_tokens != num_tokens:
+            raise ValueError(
+                "SpecSteer metadata mismatch: draft_token_ids has "
+                f"{num_tokens} rows but cu_num_draft_tokens[-1] is "
+                f"{expected_num_tokens}."
+            )
+
+        if specsteer_metadata.target_logits_indices.shape[0] != num_tokens:
+            raise ValueError(
+                "SpecSteer metadata mismatch: target_logits_indices length "
+                f"{specsteer_metadata.target_logits_indices.shape[0]} does not match "
+                f"num_tokens {num_tokens}."
+            )
+
+        if not torch.equal(
+            metadata.target_logits_indices, specsteer_metadata.target_logits_indices
+        ):
+            raise ValueError(
+                "SpecSteer metadata mismatch: target_logits_indices diverged between "
+                "SpecDecodeMetadata and SpecSteerMetadata."
+            )
+
+        for name, aux_logits in (
+            ("base_verifier_logits", specsteer_metadata.base_verifier_logits),
+            ("augmented_drafter_logits", specsteer_metadata.augmented_drafter_logits),
+        ):
+            if aux_logits is None:
+                continue
+            if aux_logits.ndim != 2:
+                raise ValueError(
+                    f"SpecSteer {name} must be rank-2, got shape "
+                    f"{tuple(aux_logits.shape)}."
+                )
+            if aux_logits.shape[0] != num_tokens:
+                raise ValueError(
+                    f"SpecSteer {name} has {aux_logits.shape[0]} rows but expected "
+                    f"{num_tokens}."
+                )
+
     def _sample(
         self,
         logits: torch.Tensor | None,
@@ -3164,13 +3224,12 @@ class GPUModelRunner(
             )
 
         if self.speculative_config and self.speculative_config.method == "specsteer":
-            base_logits = self._specsteer_base_logits
-            steer_logits = self._specsteer_steer_logits
+            self._validate_specsteer_sampling_inputs(logits, spec_decode_metadata)
             return self.specsteer_sampler(
                 metadata=spec_decode_metadata,
                 logits=logits,
-                base_logits=base_logits,
-                steer_logits=steer_logits,
+                base_logits=None,
+                steer_logits=None,
                 sampling_metadata=sampling_metadata,
             )
 
@@ -4562,9 +4621,11 @@ class GPUModelRunner(
                         spec_config.use_specsteer()
                         and accepted_draft_token_counts is not None
                     ):
-                        valid_counts_for_prepare = self._specsteer_verified_valid_counts(
-                            accepted_draft_token_counts,
-                            spec_decode_metadata.num_draft_tokens,
+                        valid_counts_for_prepare = (
+                            self._specsteer_verified_valid_counts(
+                                accepted_draft_token_counts,
+                                spec_decode_metadata.num_draft_tokens,
+                            )
                         )
                     (
                         common_attn_metadata,
@@ -4675,8 +4736,36 @@ class GPUModelRunner(
         self._specsteer_steer_logits = steer_logits
         self._specsteer_base_logits = base_logits
         if spec_decode_metadata is not None and spec_decode_metadata.specsteer:
-            spec_decode_metadata.specsteer.base_verifier_logits = base_logits
-            spec_decode_metadata.specsteer.augmented_drafter_logits = steer_logits
+            specsteer_metadata = spec_decode_metadata.specsteer
+            num_tokens = int(specsteer_metadata.draft_token_ids.shape[0])
+            expected_num_tokens = (
+                int(specsteer_metadata.cu_num_draft_tokens[-1].item())
+                if specsteer_metadata.cu_num_draft_tokens.numel() > 0
+                else 0
+            )
+            if expected_num_tokens != num_tokens:
+                raise ValueError(
+                    "SpecSteer metadata mismatch before sampling: draft_token_ids has "
+                    f"{num_tokens} rows but cu_num_draft_tokens[-1] is "
+                    f"{expected_num_tokens}."
+                )
+            for name, aux_logits in (
+                ("base_verifier_logits", base_logits),
+                ("augmented_drafter_logits", steer_logits),
+            ):
+                if aux_logits.ndim != 2:
+                    raise ValueError(
+                        f"SpecSteer {name} must be rank-2, got shape "
+                        f"{tuple(aux_logits.shape)}."
+                    )
+                if aux_logits.shape[0] != num_tokens:
+                    raise ValueError(
+                        f"SpecSteer {name} has {aux_logits.shape[0]} rows but "
+                        f"expected {num_tokens}."
+                    )
+
+            specsteer_metadata.base_verifier_logits = base_logits
+            specsteer_metadata.augmented_drafter_logits = steer_logits
 
     def _initialize_specsteer_base_verifier(self) -> None:
         assert self.speculative_config is not None
