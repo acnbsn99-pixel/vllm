@@ -7,6 +7,24 @@ import torch
 
 
 @dataclass
+class SpecSteerMetadata:
+    # [num_tokens]
+    draft_token_ids: torch.Tensor
+    # [batch_size]
+    num_draft_tokens: list[int]
+    # [batch_size]
+    cu_num_draft_tokens: torch.Tensor
+    # [num_tokens]
+    target_logits_indices: torch.Tensor
+    # [num_tokens, vocab_size]
+    base_verifier_logits: torch.Tensor | None = None
+    # [num_tokens, vocab_size] or [batch_size, vocab_size]
+    augmented_drafter_logits: torch.Tensor | None = None
+    # [num_tokens] or [batch_size]
+    augmented_drafter_logits_indices: torch.Tensor | None = None
+
+
+@dataclass
 class SpecDecodeMetadata:
     # [num_tokens]
     draft_token_ids: torch.Tensor
@@ -22,6 +40,8 @@ class SpecDecodeMetadata:
     bonus_logits_indices: torch.Tensor
     # [num_tokens + batch_size]
     logits_indices: torch.Tensor
+    # Optional metadata only used by SpecSteer.
+    specsteer: SpecSteerMetadata | None = None
 
     def __post_init__(self):
         self.max_spec_len = max(self.num_draft_tokens)
