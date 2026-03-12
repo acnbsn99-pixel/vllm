@@ -353,19 +353,18 @@ def get_vocab_aligner(args) -> VocabAligner:
     return PadTruncateVocabAligner(pad_value=-float("inf"))
 
 
-def ensure_greedy_only(generation_config) -> None:
-    """SpecSteer currently supports greedy decoding only."""
-    if getattr(generation_config, "do_sample", False):
-        raise ValueError("SpecSteer only supports greedy decoding (do_sample=False).")
+def _specstep_prefix_lens(context_len: int, draft_len: int,
+                          accepted_tokens: int) -> tuple[int, int]:
+    """Return (verified_prefix_len, emitted_prefix_len) for one spec step.
 
-    temperature = getattr(generation_config, "temperature", None)
-    if temperature is not None and float(temperature) != 0.0:
-        raise ValueError("SpecSteer requires greedy decoding with temperature=0.")
-
-
-def resolve_draft_prompt(prompt: str, draft_prompt: Optional[str] = None) -> str:
-    """Use the draft prompt when provided, otherwise default to prompt."""
-    return prompt if draft_prompt is None else draft_prompt
+    verified_prefix_len keeps KV only through context + accepted draft tokens.
+    emitted_prefix_len additionally includes the recovery token if the first
+    rejection happens in this step.
+    """
+    verified_prefix_len = context_len + accepted_tokens
+    has_rejection = accepted_tokens < draft_len
+    emitted_prefix_len = verified_prefix_len + int(has_rejection)
+    return verified_prefix_len, emitted_prefix_len
 
 # =======================================================
 # 3. 核心解码逻辑 (Single Draft, Dual Verify)
@@ -531,25 +530,34 @@ def _context_assisted_decoding(
             # ==========================================
             # 5. Cache Management (Crucial)
             # ==========================================
-            main_input_ids = torch.cat([main_input_ids.to(model.device), tokens_to_append.to(model.device)], dim=1)
-            asst_input_ids = torch.cat([asst_input_ids.to(model.device), tokens_to_append.to(model.device)], dim=1)
+            context_len = main_input_ids.shape[1]
+            verified_prefix_len, emitted_prefix_len = _specstep_prefix_lens(
+                context_len=context_len,
+                draft_len=draft_len,
+                accepted_tokens=num_matches,
+            )
 
-            # Determine cache status
-            if final_next_token is not None:
-                # Fused: 'tokens_to_append' includes the fused token (last one).
-                # We haven't processed the fused token yet.
-                # Valid cache = Context + Accepted (num_matches)
-                n_accepted = num_matches
-                keep_len = main_input_ids.shape[1] - 1
-            else:
-                # All Match: 'tokens_to_append' is just accepted tokens.
-                # We verified them all.
-                # Valid cache = Context + Accepted (num_matches)
-                n_accepted = num_matches
-                keep_len = main_input_ids.shape[1]
+            main_input_ids = torch.cat(
+                [main_input_ids.to(model.device), tokens_to_append.to(model.device)],
+                dim=1,
+            )[:, :emitted_prefix_len]
+            asst_input_ids = torch.cat(
+                [asst_input_ids.to(model.device), tokens_to_append.to(model.device)],
+                dim=1,
+            )[:, :emitted_prefix_len]
 
-            llm_stream.update_after_append(llm_outputs, keep_len=keep_len, n_new_tokens=n_accepted)
-            base_stream.update_after_append(base_outputs, keep_len=keep_len, n_new_tokens=n_accepted)
+            # Keep verifier KV strictly at (context + accepted) so recovery
+            # token is emitted but not marked speculative-verified in this pass.
+            llm_stream.update_after_append(
+                llm_outputs,
+                keep_len=verified_prefix_len,
+                n_new_tokens=num_matches,
+            )
+            base_stream.update_after_append(
+                base_outputs,
+                keep_len=verified_prefix_len,
+                n_new_tokens=num_matches,
+            )
 
             # Reset Drafter (augmented)
             cur_len_asst = asst_input_ids.shape[1]
