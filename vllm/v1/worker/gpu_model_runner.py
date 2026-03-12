@@ -780,6 +780,8 @@ class GPUModelRunner(
         # Cached outputs.
         self._draft_token_ids: list[list[int]] | torch.Tensor | None = None
         self.specsteer_augmented_logits: torch.Tensor | None = None
+        self._specsteer_base_logits: torch.Tensor | None = None
+        self._specsteer_steer_logits: torch.Tensor | None = None
         # N-gram GPU path: async D2H buffer/event for per-request valid draft counts.
         self._num_valid_draft_tokens: torch.Tensor | None = None
         self._num_valid_draft_tokens_cpu: torch.Tensor | None = None
@@ -3145,8 +3147,8 @@ class GPUModelRunner(
             )
 
         if self.speculative_config and self.speculative_config.method == "specsteer":
-            base_logits = getattr(self, "_specsteer_base_logits", None)
-            steer_logits = getattr(self, "_specsteer_steer_logits", None)
+            base_logits = self._specsteer_base_logits
+            steer_logits = self._specsteer_steer_logits
             return self.specsteer_sampler(
                 metadata=spec_decode_metadata,
                 logits=logits,
@@ -3983,6 +3985,8 @@ class GPUModelRunner(
                 )
 
         self._draft_token_ids = None
+        self._specsteer_base_logits = None
+        self._specsteer_steer_logits = None
         self._draft_token_req_ids = None
         self.input_batch.prev_sampled_token_ids = None
 
@@ -4547,6 +4551,10 @@ class GPUModelRunner(
             if spec_config.use_specsteer():
                 assert isinstance(propose_output, tuple)
                 draft_token_ids, self.specsteer_augmented_logits = propose_output
+                # Current revision reuses the same draft-model proposer execution
+                # path for both logical auxiliary streams.
+                self._specsteer_steer_logits = self.specsteer_augmented_logits
+                self._specsteer_base_logits = self.specsteer_augmented_logits
             else:
                 draft_token_ids = propose_output
 

@@ -23,6 +23,7 @@ class SpecSteerProposer(DraftModelProposer):
         super().__init__(vllm_config=vllm_config, device=device, runner=runner)
         self._accepted_prefix_lens: dict[str, int] = defaultdict(int)
         self._logical_streams: dict[str, list[int]] = {}
+        self._step_logits: list[torch.Tensor] = []
 
     def _get_prompt_for_drafting(self, req_state: CachedRequestState) -> list[int]:
         prompt = getattr(req_state, "draft_prompt_token_ids", None)
@@ -61,16 +62,37 @@ class SpecSteerProposer(DraftModelProposer):
                 self._logical_streams[req_id] = stream
             self._accepted_prefix_lens[req_id] = accepted_prefix_len
 
+    def _greedy_sample(self, hidden_states: torch.Tensor) -> torch.Tensor:
+        """Greedy sample and record per-step logits for SpecSteer recovery."""
+        if self.use_local_argmax_reduction:
+            # local argmax path does not expose full logits; force full logits for
+            # specsteer since recovery requires logit vectors.
+            logits = self.model.compute_logits(hidden_states)
+            next_token_ids = logits.argmax(dim=-1)
+        else:
+            logits = self.model.compute_logits(hidden_states)
+            next_token_ids = logits.argmax(dim=-1)
+
+        self._step_logits.append(logits)
+        return next_token_ids
+
     def propose(self, *args, **kwargs) -> tuple[torch.Tensor, torch.Tensor]:
         assert self.runner is not None
         self._sync_logical_stream(self.runner.requests, self.runner.input_batch)
 
+        self._step_logits = []
         draft_token_ids = super().propose(*args, **kwargs)
-        # Augmented recovery logits are represented as per-draft-token scores.
-        # Shape: [batch, num_speculative_tokens].
-        augmented_logits = torch.zeros(
-            draft_token_ids.shape,
-            dtype=torch.float32,
-            device=draft_token_ids.device,
-        )
+
+        # Flatten per-step logits to [num_tokens, vocab] so the sampler can index
+        # by cu_num_draft_tokens slices.
+        if self._step_logits:
+            augmented_logits = torch.stack(self._step_logits, dim=1).reshape(
+                -1, self._step_logits[0].shape[-1]
+            )
+        else:
+            augmented_logits = torch.empty(
+                (0, self.model.config.vocab_size),
+                dtype=torch.float32,
+                device=draft_token_ids.device,
+            )
         return draft_token_ids, augmented_logits

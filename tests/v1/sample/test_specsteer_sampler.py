@@ -122,3 +122,19 @@ def test_specsteer_sampler_enforces_greedy_only():
             steer_logits=logits[:2],
             sampling_metadata=_DummySamplingMetadata(all_greedy=False),
         )
+
+
+def test_specsteer_sampler_requires_aux_logits():
+    device = torch.device("cpu")
+    metadata = _metadata(device)
+    sampler = SpecSteerSampler(_DummySampler())
+    logits = torch.zeros((3, 3), dtype=torch.float32, device=device)
+
+    with pytest.raises(ValueError, match="requires both base and augmented"):
+        sampler(
+            metadata=metadata,
+            logits=logits,
+            base_logits=None,
+            steer_logits=None,
+            sampling_metadata=_DummySamplingMetadata(all_greedy=True),
+        )

@@ -60,13 +60,10 @@ class SpecSteerSampler(nn.Module):
             if steer_logits is None:
                 steer_logits = metadata.specsteer.augmented_drafter_logits
 
-        # Fallback behavior: reuse target logits when auxiliary tensors are
-        # unavailable. This keeps the V1 execution path robust while preserving
-        # speculative token transport and placeholder semantics.
-        if base_logits is None:
-            base_logits = logits[metadata.target_logits_indices]
-        if steer_logits is None:
-            steer_logits = logits[metadata.target_logits_indices]
+        if base_logits is None or steer_logits is None:
+            raise ValueError(
+                "SpecSteer requires both base and augmented auxiliary logits."
+            )
 
         target_logits = logits[metadata.target_logits_indices].to(torch.float32)
 
