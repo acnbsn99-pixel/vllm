@@ -253,3 +253,23 @@ def test_negative_prompt_token_ids_flat():
             prompt=[-1],
             max_tokens=10,
         )
+
+
+def test_draft_prompt_fields_are_cleanly_ignored_in_openai_completion_request():
+    """OpenAI completion path does not support draft_prompt* fields yet.
+
+    Unknown fields are accepted as extras and ignored by serving logic,
+    rather than causing a server-side crash.
+    """
+    req = CompletionRequest(
+        model=MODEL_NAME,
+        prompt="Test prompt",
+        max_tokens=10,
+        draft_prompt="ignored",
+        draft_prompt_token_ids=[1, 2],
+    )
+
+    assert req.model_extra is not None
+    assert req.model_extra["draft_prompt"] == "ignored"
+    assert req.model_extra["draft_prompt_token_ids"] == [1, 2]
+
