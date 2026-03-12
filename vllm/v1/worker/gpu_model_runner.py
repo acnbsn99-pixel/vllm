@@ -32,6 +32,7 @@ from vllm.config import (
     set_current_vllm_config,
     update_config,
 )
+from vllm.config.utils import replace as config_replace
 from vllm.config.cache import CacheConfig
 from vllm.distributed.ec_transfer import get_ec_transfer, has_ec_transfer
 from vllm.distributed.eplb.eplb_state import EplbState
@@ -782,6 +783,8 @@ class GPUModelRunner(
         self.specsteer_augmented_logits: torch.Tensor | None = None
         self._specsteer_base_logits: torch.Tensor | None = None
         self._specsteer_steer_logits: torch.Tensor | None = None
+        self.specsteer_base_verifier: SpecSteerProposer | None = None
+        self._specsteer_reuse_drafter_weights = False
         # N-gram GPU path: async D2H buffer/event for per-request valid draft counts.
         self._num_valid_draft_tokens: torch.Tensor | None = None
         self._num_valid_draft_tokens_cpu: torch.Tensor | None = None
@@ -4591,14 +4594,110 @@ class GPUModelRunner(
             if spec_config.use_specsteer():
                 assert isinstance(propose_output, tuple)
                 draft_token_ids, self.specsteer_augmented_logits = propose_output
-                # Current revision reuses the same draft-model proposer execution
-                # path for both logical auxiliary streams.
-                self._specsteer_steer_logits = self.specsteer_augmented_logits
-                self._specsteer_base_logits = self.specsteer_augmented_logits
+                self._set_specsteer_aux_logits(
+                    steer_logits=self.specsteer_augmented_logits,
+                    base_logits=self._run_specsteer_base_verifier_forward(
+                        target_token_ids=target_token_ids,
+                        target_positions=target_positions,
+                        target_hidden_states=target_hidden_states,
+                        next_token_ids=next_token_ids,
+                        token_indices_to_sample=token_indices_to_sample,
+                        sampling_metadata=sampling_metadata,
+                        common_attn_metadata=common_attn_metadata,
+                        mm_embed_inputs=mm_embed_inputs,
+                        num_rejected_tokens_gpu=num_rejected_tokens_gpu,
+                        slot_mappings=slot_mappings,
+                    ),
+                    spec_decode_metadata=spec_decode_metadata,
+                )
             else:
                 draft_token_ids = propose_output
 
         return draft_token_ids
+
+    def _run_specsteer_base_verifier_forward(
+        self,
+        *,
+        target_token_ids: torch.Tensor,
+        target_positions: torch.Tensor,
+        target_hidden_states: torch.Tensor,
+        next_token_ids: torch.Tensor,
+        token_indices_to_sample: torch.Tensor | None,
+        sampling_metadata: SamplingMetadata,
+        common_attn_metadata: CommonAttentionMetadata,
+        mm_embed_inputs: tuple[list[torch.Tensor], torch.Tensor] | None,
+        num_rejected_tokens_gpu: torch.Tensor | None,
+        slot_mappings: dict[str, torch.Tensor] | list[dict[str, torch.Tensor]] | None,
+    ) -> torch.Tensor:
+        verifier = self.specsteer_base_verifier
+        if verifier is None:
+            raise RuntimeError("SpecSteer base verifier is not initialized.")
+
+        propose_output = verifier.propose(
+            target_token_ids=target_token_ids,
+            target_positions=target_positions,
+            target_hidden_states=target_hidden_states,
+            next_token_ids=next_token_ids,
+            token_indices_to_sample=token_indices_to_sample,
+            sampling_metadata=sampling_metadata,
+            common_attn_metadata=deepcopy(common_attn_metadata),
+            mm_embed_inputs=mm_embed_inputs,
+            num_rejected_tokens_gpu=num_rejected_tokens_gpu,
+            slot_mappings=deepcopy(slot_mappings),
+        )
+        assert isinstance(propose_output, tuple)
+        _, base_logits = propose_output
+        return base_logits
+
+    def _set_specsteer_aux_logits(
+        self,
+        *,
+        steer_logits: torch.Tensor,
+        base_logits: torch.Tensor,
+        spec_decode_metadata: SpecDecodeMetadata | None,
+    ) -> None:
+        self._specsteer_steer_logits = steer_logits
+        self._specsteer_base_logits = base_logits
+        if spec_decode_metadata is not None and spec_decode_metadata.specsteer:
+            spec_decode_metadata.specsteer.base_verifier_logits = base_logits
+            spec_decode_metadata.specsteer.augmented_drafter_logits = steer_logits
+
+    def _initialize_specsteer_base_verifier(self) -> None:
+        assert self.speculative_config is not None
+        assert isinstance(self.drafter, SpecSteerProposer)
+
+        base_model = self.speculative_config.base_model
+        if base_model is None or base_model == self.speculative_config.model:
+            self._specsteer_reuse_drafter_weights = True
+            self.specsteer_base_verifier = SpecSteerProposer(
+                vllm_config=self.vllm_config,
+                device=self.device,
+                runner=self,
+            )
+            self.specsteer_base_verifier.model = self.drafter.model
+            return
+
+        self._specsteer_reuse_drafter_weights = False
+        assert self.speculative_config.draft_model_config is not None
+        base_model_config = config_replace(
+            self.speculative_config.draft_model_config,
+            model=base_model,
+        )
+        base_speculative_config = config_replace(
+            self.speculative_config,
+            model=base_model,
+            draft_model_config=base_model_config,
+        )
+        base_vllm_config = config_replace(
+            self.vllm_config,
+            speculative_config=base_speculative_config,
+        )
+        self.specsteer_base_verifier = SpecSteerProposer(
+            vllm_config=base_vllm_config,
+            device=self.device,
+            runner=self,
+        )
+        self.specsteer_base_verifier.load_model(self.model)
 
     def update_config(self, overrides: dict[str, Any]) -> None:
         allowed_config_names = {"load_config", "model_config"}
@@ -4643,6 +4742,12 @@ class GPUModelRunner(
                 if hasattr(self, "drafter"):
                     logger.info_once("Loading drafter model...")
                     self.drafter.load_model(self.model)
+                    if (
+                        self.speculative_config is not None
+                        and self.speculative_config.use_specsteer()
+                        and isinstance(self.drafter, SpecSteerProposer)
+                    ):
+                        self._initialize_specsteer_base_verifier()
                     if (
                         hasattr(self.drafter, "model")
                         and is_mixture_of_experts(self.drafter.model)
@@ -4708,10 +4813,17 @@ class GPUModelRunner(
         )
         if not load_dummy_weights:
             prepare_communication_buffer_for_model(self.model)
+            drafter_model = None
             if (drafter := getattr(self, "drafter", None)) and (
                 drafter_model := getattr(drafter, "model", None)
             ):
                 prepare_communication_buffer_for_model(drafter_model)
+            if (
+                (base_verifier := self.specsteer_base_verifier) is not None
+                and (base_model := getattr(base_verifier, "model", None)) is not None
+                and base_model is not drafter_model
+            ):
+                prepare_communication_buffer_for_model(base_model)
         mm_config = self.model_config.multimodal_config
         self.is_multimodal_pruning_enabled = (
             supports_multimodal_pruning(self.get_model())
@@ -6090,6 +6202,10 @@ class GPUModelRunner(
                 self.drafter, EagleProposer | DraftModelProposer | SpecSteerProposer
             )
             self.drafter.initialize_attn_backend(kv_cache_config, kernel_block_sizes)
+            if self.specsteer_base_verifier is not None:
+                self.specsteer_base_verifier.initialize_attn_backend(
+                    kv_cache_config, kernel_block_sizes
+                )
 
     def _check_and_update_cudagraph_mode(
         self,
