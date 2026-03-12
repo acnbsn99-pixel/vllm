@@ -118,14 +118,34 @@ def test_draft_prompt_defaults_to_prompt_when_missing():
     assert resolve_draft_prompt(prompt, "short draft") == "short draft"
 
 
+def test_specsteer_sampler_output_layout_compatible_with_parse_output_shape():
+    batch = 2
+    max_spec_len = 3
+    output_token_ids = torch.tensor(
+        [
+            [7, 8, PLACEHOLDER_TOKEN_ID, PLACEHOLDER_TOKEN_ID],
+            [4, 42, 9, PLACEHOLDER_TOKEN_ID],
+        ],
+        dtype=torch.int64,
+    )
+
+    assert output_token_ids.shape == (batch, max_spec_len + 1)
+
+    parsed, _ = RejectionSampler.parse_output(
+        output_token_ids=output_token_ids,
+        vocab_size=10,
+    )
+    assert parsed == [[7, 8], [4, 9]]
+
+
 def test_spec_decode_smoke_e2e_no_crash_and_non_empty_output():
     llm = LLM(
         model="hmellor/tiny-random-LlamaForCausalLM",
         enforce_eager=True,
         speculative_config={
-            "method": "ngram",
-            "prompt_lookup_min": 1,
-            "prompt_lookup_max": 2,
+            "method": "specsteer",
+            "model": "hmellor/tiny-random-LlamaForCausalLM",
+            "base_model": "hmellor/tiny-random-LlamaForCausalLM",
             "num_speculative_tokens": 2,
         },
     )
@@ -138,3 +158,22 @@ def test_spec_decode_smoke_e2e_no_crash_and_non_empty_output():
     assert outputs
     assert outputs[0].outputs
     assert len(outputs[0].outputs[0].token_ids) > 0
+
+
+def test_spec_decode_smoke_e2e_rejects_non_greedy_sampling():
+    llm = LLM(
+        model="hmellor/tiny-random-LlamaForCausalLM",
+        enforce_eager=True,
+        speculative_config={
+            "method": "specsteer",
+            "model": "hmellor/tiny-random-LlamaForCausalLM",
+            "base_model": "hmellor/tiny-random-LlamaForCausalLM",
+            "num_speculative_tokens": 2,
+        },
+    )
+
+    with pytest.raises(ValueError, match="greedy"):
+        llm.generate(
+            ["Write exactly five random words."],
+            SamplingParams(temperature=0.7, max_tokens=8),
+        )
