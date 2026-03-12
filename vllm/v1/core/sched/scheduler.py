@@ -1013,6 +1013,11 @@ class Scheduler(SchedulerInterface):
 
         session._all_token_ids.extend(update.prompt_token_ids or ())
         session.prompt_token_ids.extend(update.prompt_token_ids or ())
+        session.draft_prompt_token_ids = (
+            update.draft_prompt_token_ids
+            if update.draft_prompt_token_ids is not None
+            else session.prompt_token_ids
+        )
         # Update block hashes for the new tokens.
         session.update_block_hashes()
         session.num_prompt_tokens = len(session.prompt_token_ids)
