@@ -54,7 +54,6 @@ SpeculativeMethod = Literal[
     "mlp_speculator",
     "specsteer",
     "draft_model",
-    "specsteer",
     "suffix",
     EagleModelTypes,
     NgramGPUTypes,
@@ -191,17 +190,16 @@ class SpeculativeConfig:
     of more memory to cache draft logits."""
 
     # SpecSteer configuration
-    base_model: str | None = None
-    gamma: float = 1.0
-    eps: float = 1e-8
-    fusion_method: str = "costeer"
+    gamma: float = 0.6
+    eps: float = 1e-10
+    fusion_method: Literal["costeer", "linear"] = "costeer"
     T: int = 20
     alpha: float = 2.0
-    beta: float = 1.0
+    beta: float = 1.5
     player_lambda: float = 2.0
     eta: float = 10.0
-    fusion_coeff: float = 1.0
-    vocab_align_method: str = "pad_truncate"
+    fusion_coeff: float | None = None
+    vocab_align_method: Literal["pad_truncate"] = "pad_truncate"
     specsteer_enable_bonus_token: bool = False
 
     def compute_hash(self) -> str:
@@ -385,9 +383,7 @@ class SpeculativeConfig:
 
         if self.method == "specsteer":
             if self.model is None:
-                raise ValueError(
-                    "specsteer requires `model` to be provided."
-                )
+                raise ValueError("specsteer requires `model` to be provided.")
             if self.num_speculative_tokens is None:
                 raise ValueError(
                     "specsteer requires `num_speculative_tokens` to be provided."
@@ -414,20 +410,16 @@ class SpeculativeConfig:
             elif self.method == "suffix":
                 self.model = "suffix"
             elif self.method == "specsteer":
+                if self.target_model_config is None:
+                    raise ValueError(
+                        "target_model_config must be present for specsteer"
+                    )
                 # SpecSteer still requires draft proposals.
                 self.model = self.target_model_config.model
                 if not self.quantization:
                     self.quantization = self.target_model_config.quantization
             elif self.method == "extract_hidden_states":
                 self.model = "extract_hidden_states"
-            elif self.method == "specsteer":
-                if self.target_model_config is None:
-                    raise ValueError(
-                        "target_model_config must be present for specsteer"
-                    )
-                self.model = self.target_model_config.model
-                if not self.quantization:
-                    self.quantization = self.target_model_config.quantization
             else:
                 raise ValueError(
                     "num_speculative_tokens was provided but without speculative model."
@@ -857,7 +849,7 @@ class SpeculativeConfig:
 
     def verify_equal_vocab_size_if_draft_model(self):
         if (
-            self.method in ("draft_model", "specsteer")
+            self.method in ("draft_model",)
             and self.target_model_config is not None
             and self.draft_model_config is not None
         ):

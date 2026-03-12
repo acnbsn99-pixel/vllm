@@ -572,7 +572,19 @@ class GPUModelRunner(
                     f"{self.speculative_config.method}"
                 )
             self.rejection_sampler = RejectionSampler(self.sampler)
-            self.specsteer_sampler = SpecSteerSampler(self.sampler)
+            self.specsteer_sampler = SpecSteerSampler(
+                self.sampler,
+                gamma=self.speculative_config.gamma,
+                eps=self.speculative_config.eps,
+                fusion_method=self.speculative_config.fusion_method,
+                linear_coeff=self.speculative_config.fusion_coeff,
+                costeer_T=self.speculative_config.T,
+                costeer_alpha=self.speculative_config.alpha,
+                costeer_beta=self.speculative_config.beta,
+                costeer_player_lambda=self.speculative_config.player_lambda,
+                costeer_eta=self.speculative_config.eta,
+                enable_bonus_token=self.speculative_config.specsteer_enable_bonus_token,
+            )
 
         self.num_spec_tokens = 0
         if self.speculative_config:
