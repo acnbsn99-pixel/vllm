@@ -191,14 +191,38 @@ class SpeculativeConfig:
 
     # SpecSteer configuration
     gamma: float = 0.6
+    """SpecSteer acceptance threshold scale used in
+    ``p_target > gamma * (p_base + eps)``."""
     eps: float = 1e-10
+    """Small constant added to the base probability in the acceptance test
+    for numerical stability."""
     fusion_method: Literal["costeer", "linear"] = "costeer"
+    """Fusion strategy used to recover the token at the first rejection.
+
+    Mirrors ``get_fusion_strategy`` in ``vllm/v1/specsteer.py``:
+    ``"linear"`` selects linear fusion, and all other values fall back to
+    CoSteer.
+    """
     T: int = 20
+    """Number of CoSteer iterative updates (``t = 1..T``)."""
     alpha: float = 2.0
+    """CoSteer weight for ``(log_player - ref_log)`` in each iteration."""
     beta: float = 1.5
+    """CoSteer weight for context-gain (``delta``).
+
+    Also used as the linear-fusion coefficient fallback when
+    ``fusion_coeff`` is ``None``.
+    """
     player_lambda: float = 2.0
+    """CoSteer denominator/reference-mixing scale (``player_lambda``)."""
     eta: float = 10.0
+    """CoSteer momentum-like scale used as ``1 / eta`` in the update."""
     fusion_coeff: float | None = None
+    """Linear-fusion coefficient.
+
+    If unset, linear fusion falls back to ``beta``, matching
+    ``LinearFusion`` in ``vllm/v1/specsteer.py``.
+    """
     vocab_align_method: Literal["pad_truncate"] = "pad_truncate"
     specsteer_enable_bonus_token: bool = False
 

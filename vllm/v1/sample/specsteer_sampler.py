@@ -24,7 +24,7 @@ class SpecSteerSampler(nn.Module):
         linear_coeff: float | None = None,
         costeer_T: int = 20,
         costeer_alpha: float = 2.0,
-        costeer_beta: float = 1.0,
+        costeer_beta: float = 1.5,
         costeer_player_lambda: float = 2.0,
         costeer_eta: float = 10.0,
         enable_bonus_token: bool = False,
@@ -34,7 +34,9 @@ class SpecSteerSampler(nn.Module):
         self.gamma = gamma
         self.eps = eps
         self.fusion_method = fusion_method.lower()
-        self.linear_coeff = linear_coeff
+        self.linear_coeff = (
+            costeer_beta if linear_coeff is None else linear_coeff
+        )
         self.costeer_T = costeer_T
         self.costeer_alpha = costeer_alpha
         self.costeer_beta = costeer_beta
@@ -152,10 +154,7 @@ class SpecSteerSampler(nn.Module):
         delta[torch.isnan(delta)] = 0.0
 
         if self.fusion_method == "linear":
-            coeff = self.linear_coeff
-            if coeff is None:
-                coeff = self.costeer_beta
-            return llm_log + coeff * delta
+            return llm_log + self.linear_coeff * delta
 
         q_sum = torch.zeros_like(llm_log)
         log_player = llm_log.clone()

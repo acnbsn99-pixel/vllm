@@ -578,7 +578,11 @@ class GPUModelRunner(
                 gamma=self.speculative_config.gamma,
                 eps=self.speculative_config.eps,
                 fusion_method=self.speculative_config.fusion_method,
-                linear_coeff=self.speculative_config.fusion_coeff,
+                linear_coeff=(
+                    self.speculative_config.beta
+                    if self.speculative_config.fusion_coeff is None
+                    else self.speculative_config.fusion_coeff
+                ),
                 costeer_T=self.speculative_config.T,
                 costeer_alpha=self.speculative_config.alpha,
                 costeer_beta=self.speculative_config.beta,
