@@ -52,6 +52,7 @@ SpeculativeMethod = Literal[
     "ngram",
     "medusa",
     "mlp_speculator",
+    "specsteer",
     "draft_model",
     "specsteer",
     "suffix",
@@ -412,6 +413,11 @@ class SpeculativeConfig:
                 self.model = "ngram_gpu"
             elif self.method == "suffix":
                 self.model = "suffix"
+            elif self.method == "specsteer":
+                # SpecSteer still requires draft proposals.
+                self.model = self.target_model_config.model
+                if not self.quantization:
+                    self.quantization = self.target_model_config.quantization
             elif self.method == "extract_hidden_states":
                 self.model = "extract_hidden_states"
             elif self.method == "specsteer":
@@ -848,7 +854,7 @@ class SpeculativeConfig:
 
     def verify_equal_vocab_size_if_draft_model(self):
         if (
-            self.method == "draft_model"
+            self.method in ("draft_model", "specsteer")
             and self.target_model_config is not None
             and self.draft_model_config is not None
         ):
@@ -883,7 +889,7 @@ class SpeculativeConfig:
         return self.method in ("eagle", "eagle3", "mtp")
 
     def uses_draft_model(self) -> bool:
-        return self.method == "draft_model"
+        return self.method in ("draft_model", "specsteer")
 
     def uses_specsteer(self) -> bool:
         return self.method == "specsteer"
