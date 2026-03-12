@@ -138,3 +138,135 @@ def test_specsteer_sampler_requires_aux_logits():
             steer_logits=None,
             sampling_metadata=_DummySamplingMetadata(all_greedy=True),
         )
+
+
+def test_specsteer_sampler_linear_fusion_recovers_expected_argmax_token():
+    device = torch.device("cpu")
+    metadata = _metadata(device)
+    sampler = SpecSteerSampler(
+        _DummySampler(),
+        gamma=0.9,
+        fusion_method="linear",
+        linear_coeff=2.0,
+        enable_bonus_token=False,
+    )
+
+    logits = torch.tensor(
+        [
+            [3.0, 0.0, 0.0],  # target step 0: rejects draft token 1
+            [0.0, 0.0, 5.0],  # target step 1: unused after rejection
+            [0.0, 0.0, 5.0],  # bonus logits
+        ],
+        dtype=torch.float32,
+        device=device,
+    )
+    base_logits = torch.tensor(
+        [
+            [0.0, 5.0, 0.0],
+            [0.0, 0.0, 5.0],
+        ],
+        dtype=torch.float32,
+        device=device,
+    )
+    steer_logits = torch.tensor(
+        [
+            [0.0, 0.0, 6.0],
+            [0.0, 0.0, 5.0],
+        ],
+        dtype=torch.float32,
+        device=device,
+    )
+
+    out = sampler(
+        metadata=metadata,
+        logits=logits,
+        base_logits=base_logits,
+        steer_logits=steer_logits,
+        sampling_metadata=_DummySamplingMetadata(all_greedy=True),
+    )
+
+    assert out.accepted_draft_token_counts.tolist() == [0]
+    assert out.sampled_token_ids[0, 0].item() == 2
+
+
+def test_specsteer_sampler_costeer_iterative_fusion_is_deterministic_and_recovers_token():
+    device = torch.device("cpu")
+    metadata = _metadata(device)
+    sampler = SpecSteerSampler(
+        _DummySampler(),
+        gamma=0.9,
+        fusion_method="costeer",
+        costeer_T=4,
+        costeer_alpha=1.5,
+        costeer_beta=2.5,
+        costeer_player_lambda=1.2,
+        costeer_eta=5.0,
+        enable_bonus_token=False,
+    )
+
+    llm = torch.tensor([[3.0, 0.0, 0.0]], dtype=torch.float32, device=device)
+    base = torch.tensor([[0.0, 5.0, 0.0]], dtype=torch.float32, device=device)
+    steer = torch.tensor([[0.0, 0.0, 6.0]], dtype=torch.float32, device=device)
+
+    fused_once = sampler._fuse_logits(llm, base, steer)
+    fused_twice = sampler._fuse_logits(llm, base, steer)
+    assert torch.equal(fused_once, fused_twice)
+    assert fused_once.argmax(dim=-1).item() == 2
+
+    logits = torch.tensor(
+        [
+            [3.0, 0.0, 0.0],
+            [0.0, 0.0, 5.0],
+            [0.0, 0.0, 5.0],
+        ],
+        dtype=torch.float32,
+        device=device,
+    )
+    base_logits = torch.tensor(
+        [
+            [0.0, 5.0, 0.0],
+            [0.0, 0.0, 5.0],
+        ],
+        dtype=torch.float32,
+        device=device,
+    )
+    steer_logits = torch.tensor(
+        [
+            [0.0, 0.0, 6.0],
+            [0.0, 0.0, 5.0],
+        ],
+        dtype=torch.float32,
+        device=device,
+    )
+
+    out = sampler(
+        metadata=metadata,
+        logits=logits,
+        base_logits=base_logits,
+        steer_logits=steer_logits,
+        sampling_metadata=_DummySamplingMetadata(all_greedy=True),
+    )
+    assert out.sampled_token_ids[0, 0].item() == 2
+
+
+def test_align_aux_logits_pads_with_neg_inf_and_truncates():
+    ref_logits = torch.zeros((2, 5), dtype=torch.float32)
+
+    aux_smaller = torch.tensor(
+        [[0.1, 0.2, 0.3], [1.0, 2.0, 3.0]], dtype=torch.float32
+    )
+    aligned_small = SpecSteerSampler._align_aux_logits(ref_logits, aux_smaller)
+    assert aligned_small.shape[-1] == 5
+    assert torch.equal(aligned_small[:, :3], aux_smaller)
+    assert torch.isneginf(aligned_small[:, 3:]).all()
+
+    aux_larger = torch.tensor(
+        [
+            [10.0, 11.0, 12.0, 13.0, 14.0, 15.0, 16.0],
+            [20.0, 21.0, 22.0, 23.0, 24.0, 25.0, 26.0],
+        ],
+        dtype=torch.float32,
+    )
+    aligned_large = SpecSteerSampler._align_aux_logits(ref_logits, aux_larger)
+    assert aligned_large.shape[-1] == 5
+    assert torch.equal(aligned_large, aux_larger[:, :5])
