@@ -48,6 +48,33 @@ def messages_to_input_ids(tok, messages, device, add_generation_prompt=True):
     inputs = tok(text, return_tensors="pt")
     return {k: v.to(device) for k, v in inputs.items()}
 
+
+def initialize_specsteer_models(speculative_config, load_model_fn):
+    """Initialize augmented and base verifier models for specsteer.
+
+    The augmented drafter always comes from ``speculative_config.model``.
+    The optional verifier comes from ``speculative_config.base_model``.
+    When ``base_model`` is omitted (or equals ``model``), the same model object
+    is reused and caller should keep distinct logical state/KV streams.
+    """
+    augmented_model_name = getattr(speculative_config, "model", None)
+    if not augmented_model_name:
+        raise ValueError("speculative_config.model must be set for specsteer")
+
+    augmented_model = load_model_fn(augmented_model_name)
+
+    base_model_name = getattr(speculative_config, "base_model", None)
+    if base_model_name is None or base_model_name == augmented_model_name:
+        # Reuse one weights object when feasible; verification/drafting state is
+        # still isolated by constructing separate stream/generator state.
+        return augmented_model, augmented_model, augmented_model_name
+
+    # Behavior note: in this revision we use an explicit second runner/model for
+    # a distinct verifier model id. Cross-model weight sharing is intentionally
+    # not attempted here to keep correctness straightforward.
+    base_model = load_model_fn(base_model_name)
+    return augmented_model, base_model, base_model_name
+
 # =========================================================================
 # 1. 融合策略 (Fusion Strategy)
 # =========================================================================
@@ -366,6 +393,8 @@ def _context_assisted_decoding(
     if model_kwargs_asst is None: model_kwargs_asst = {}
     if max_length is None: max_length = generation_config.max_length
 
+    ensure_greedy_only(generation_config)
+
     # 核心超参 gamma
     gamma = getattr(args, 'gamma', 0.6)
 
@@ -399,7 +428,8 @@ def _context_assisted_decoding(
         output_device=model.device,
     )
 
-    # 2) Base SLM(wo) Verify Stream（维护 wo_kwargs，注意它的 output 搬到 model.device 上用于 ratio）
+    # 2) Base verifier stream (wo). If assistant_model is shared with the
+    # augmented drafter, this still has an independent logical KV/cache stream.
     base_stream = VerifyStream(
         model=assistant_model,
         init_cur_len=cur_len_main,
@@ -456,6 +486,8 @@ def _context_assisted_decoding(
             # ==========================================
             # 2. Dual Verify (LLM + Base SLM)
             # ==========================================
+            # Verifier scoring must always run on the target prefix (main_input_ids),
+            # never on augmented-prefix tokens from the drafter context.
             verify_input_ids = torch.cat([main_input_ids.to(model.device), draft_tokens.to(model.device)], dim=1)
 
             llm_outputs, llm_logits_seq = llm_stream.forward_verify(verify_input_ids, draft_len=draft_len)

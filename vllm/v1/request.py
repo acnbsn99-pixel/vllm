@@ -41,6 +41,7 @@ class StreamingUpdate:
     max_tokens: int
     arrival_time: float
     sampling_params: SamplingParams | None
+    draft_prompt_token_ids: list[int] | None = None
 
     @classmethod
     def from_request(cls, request: "Request") -> "StreamingUpdate | None":
@@ -49,6 +50,7 @@ class StreamingUpdate:
         return cls(
             mm_features=request.mm_features,
             prompt_token_ids=request.prompt_token_ids,
+            draft_prompt_token_ids=request.draft_prompt_token_ids,
             max_tokens=request.max_tokens,
             arrival_time=request.arrival_time,
             sampling_params=request.sampling_params,
@@ -73,6 +75,7 @@ class Request:
         block_hasher: Callable[["Request"], list["BlockHash"]] | None = None,
         resumable: bool = False,
         reasoning_ended: bool | None = None,
+        draft_prompt_token_ids: list[int] | None = None,
     ) -> None:
         self.request_id = request_id
         self.client_index = client_index
@@ -112,6 +115,7 @@ class Request:
             raise ValueError("sampling_params and pooling_params can't both be unset")
 
         self.prompt_token_ids = prompt_token_ids
+        self.draft_prompt_token_ids = draft_prompt_token_ids
         self.prompt_embeds = prompt_embeds
         # Cache per-block prompt-embed hashes to avoid rehashing the same
         # tensor slices when generating extra keys.
@@ -186,6 +190,7 @@ class Request:
             request_id=request.request_id,
             client_index=request.client_index,
             prompt_token_ids=request.prompt_token_ids,
+            draft_prompt_token_ids=request.draft_prompt_token_ids,
             prompt_embeds=request.prompt_embeds,
             mm_features=request.mm_features,
             sampling_params=request.sampling_params,
