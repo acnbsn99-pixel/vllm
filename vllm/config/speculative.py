@@ -77,6 +77,13 @@ class SpeculativeConfig:
     model: str | None = None
     """The name of the draft model, eagle head, or additional weights, if
     provided."""
+    base_model: str | None = None
+    """Optional base verifier model for specsteer-style decoding.
+
+    If unset (or equal to ``model``), the same model can be reused for both
+    augmented drafting and base verification while keeping independent logical
+    state (e.g., separate KV/cache streams).
+    """
     method: SpeculativeMethod | None = None
     """The name of the speculative method to use. If users provide and set the
     `model` param, the speculative method type will be detected automatically
