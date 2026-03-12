@@ -1,6 +1,8 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-from vllm.renderers.inputs.preprocess import prompt_to_seq
+import pytest
+
+from vllm.renderers.inputs.preprocess import parse_dec_only_prompt, prompt_to_seq
 
 
 def test_empty_input():
@@ -39,3 +41,28 @@ def test_dict_input():
         {"prompt": "foo"},
         {"prompt_token_ids": [1, 2]},
     ]
+
+
+def test_decoder_only_draft_prompt_dict():
+    assert parse_dec_only_prompt({"prompt": "foo", "draft_prompt": "bar"}) == {
+        "prompt": "foo",
+        "draft_prompt": "bar",
+    }
+
+
+def test_decoder_only_draft_prompt_token_ids_dict():
+    assert parse_dec_only_prompt({
+        "prompt_token_ids": [1, 2],
+        "draft_prompt_token_ids": [3, 4],
+    }) == {
+        "prompt_token_ids": [1, 2],
+        "draft_prompt_token_ids": [3, 4],
+    }
+
+
+def test_decoder_only_draft_prompt_requires_base_prompt():
+    with pytest.raises(TypeError, match="Draft text prompt requires prompt text"):
+        parse_dec_only_prompt({"draft_prompt": "bar"})
+
+    with pytest.raises(TypeError, match="Draft token prompt requires prompt_token_ids"):
+        parse_dec_only_prompt({"draft_prompt_token_ids": [3, 4]})

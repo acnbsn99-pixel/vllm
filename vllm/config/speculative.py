@@ -52,7 +52,9 @@ SpeculativeMethod = Literal[
     "ngram",
     "medusa",
     "mlp_speculator",
+    "specsteer",
     "draft_model",
+    "specsteer",
     "suffix",
     EagleModelTypes,
     NgramGPUTypes,
@@ -76,6 +78,13 @@ class SpeculativeConfig:
     model: str | None = None
     """The name of the draft model, eagle head, or additional weights, if
     provided."""
+    base_model: str | None = None
+    """Optional base verifier model for specsteer-style decoding.
+
+    If unset (or equal to ``model``), the same model can be reused for both
+    augmented drafting and base verification while keeping independent logical
+    state (e.g., separate KV/cache streams).
+    """
     method: SpeculativeMethod | None = None
     """The name of the speculative method to use. If users provide and set the
     `model` param, the speculative method type will be detected automatically
@@ -180,6 +189,20 @@ class SpeculativeConfig:
     or probabilistic rejection sampling. Both respect the target model
     distribution, but the latter yields a higher acceptance rate at the cost
     of more memory to cache draft logits."""
+
+    # SpecSteer configuration
+    base_model: str | None = None
+    gamma: float = 1.0
+    eps: float = 1e-8
+    fusion_method: str = "costeer"
+    T: int = 20
+    alpha: float = 2.0
+    beta: float = 1.0
+    player_lambda: float = 2.0
+    eta: float = 10.0
+    fusion_coeff: float = 1.0
+    vocab_align_method: str = "pad_truncate"
+    specsteer_enable_bonus_token: bool = False
 
     def compute_hash(self) -> str:
         """
@@ -360,6 +383,16 @@ class SpeculativeConfig:
             )
             self.method = "mtp"
 
+        if self.method == "specsteer":
+            if self.model is None:
+                raise ValueError(
+                    "specsteer requires `model` to be provided."
+                )
+            if self.num_speculative_tokens is None:
+                raise ValueError(
+                    "specsteer requires `num_speculative_tokens` to be provided."
+                )
+
         if self.model is None and self.num_speculative_tokens is not None:
             if self.method == "mtp":
                 if self.target_model_config is None:
@@ -380,6 +413,11 @@ class SpeculativeConfig:
                 self.model = "ngram_gpu"
             elif self.method == "suffix":
                 self.model = "suffix"
+            elif self.method == "specsteer":
+                # SpecSteer still requires draft proposals.
+                self.model = self.target_model_config.model
+                if not self.quantization:
+                    self.quantization = self.target_model_config.quantization
             elif self.method == "extract_hidden_states":
                 self.model = "extract_hidden_states"
             elif self.method == "specsteer":
@@ -522,7 +560,7 @@ class SpeculativeConfig:
                             "one layer. Might need some code changes "
                             "to support multiple layers."
                         )
-                elif self.method == "draft_model":
+                elif self.method in ("draft_model", "specsteer"):
                     pass
                 else:
                     raise NotImplementedError(
@@ -854,7 +892,10 @@ class SpeculativeConfig:
         return self.method in ("eagle", "eagle3", "mtp")
 
     def uses_draft_model(self) -> bool:
-        return self.method == "draft_model"
+        return self.method in ("draft_model", "specsteer")
+
+    def uses_specsteer(self) -> bool:
+        return self.method == "specsteer"
 
     def use_specsteer(self) -> bool:
         return self.method == "specsteer"

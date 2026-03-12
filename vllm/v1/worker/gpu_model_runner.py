@@ -159,12 +159,13 @@ from vllm.v1.sample.logits_processor import LogitsProcessors, build_logitsprocs
 from vllm.v1.sample.logits_processor.interface import LogitsProcessor
 from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.sample.rejection_sampler import RejectionSampler
+from vllm.v1.sample.specsteer_sampler import SpecSteerSampler
 from vllm.v1.sample.sampler import Sampler
 from vllm.v1.spec_decode.draft_model import DraftModelProposer
 from vllm.v1.spec_decode.eagle import EagleProposer
 from vllm.v1.spec_decode.extract_hidden_states import ExtractHiddenStatesProposer
 from vllm.v1.spec_decode.medusa import MedusaProposer
-from vllm.v1.spec_decode.metadata import SpecDecodeMetadata
+from vllm.v1.spec_decode.metadata import SpecDecodeMetadata, SpecSteerMetadata
 from vllm.v1.spec_decode.ngram_proposer_gpu import (
     NgramProposerGPU,
     copy_num_valid_draft_tokens,
@@ -571,6 +572,7 @@ class GPUModelRunner(
                     f"{self.speculative_config.method}"
                 )
             self.rejection_sampler = RejectionSampler(self.sampler)
+            self.specsteer_sampler = SpecSteerSampler(self.sampler)
 
         self.num_spec_tokens = 0
         if self.speculative_config:
@@ -1123,6 +1125,7 @@ class GPUModelRunner(
             req_state = CachedRequestState(
                 req_id=req_id,
                 prompt_token_ids=new_req_data.prompt_token_ids,
+                draft_prompt_token_ids=new_req_data.draft_prompt_token_ids,
                 prompt_embeds=new_req_data.prompt_embeds,
                 mm_features=new_req_data.mm_features,
                 sampling_params=sampling_params,
@@ -1402,6 +1405,7 @@ class GPUModelRunner(
         req_state = self.requests[req_id]
 
         req_state.prompt_token_ids = new_req_data.prompt_token_ids
+        req_state.draft_prompt_token_ids = new_req_data.draft_prompt_token_ids
         req_state.mm_features = new_req_data.mm_features
         req_state.prompt_embeds = new_req_data.prompt_embeds
         req_state.sampling_params = new_req_data.sampling_params
@@ -1868,7 +1872,12 @@ class GPUModelRunner(
                 ):
                     num_decode_draft_tokens[req_idx] = len(draft_token_ids)
             spec_decode_metadata = self._calc_spec_decode_metadata(
-                num_draft_tokens, cu_num_tokens
+                num_draft_tokens,
+                cu_num_tokens,
+                include_specsteer_metadata=(
+                    self.speculative_config is not None
+                    and self.speculative_config.method == "specsteer"
+                ),
             )
             logits_indices = spec_decode_metadata.logits_indices
             num_sampled_tokens = num_draft_tokens + 1
@@ -2375,6 +2384,8 @@ class GPUModelRunner(
         self,
         num_draft_tokens: np.ndarray,
         cu_num_scheduled_tokens: np.ndarray,
+        *,
+        include_specsteer_metadata: bool = False,
     ) -> SpecDecodeMetadata:
         # Inputs:
         # cu_num_scheduled_tokens:  [  4, 104, 107, 207, 209]
@@ -2440,6 +2451,18 @@ class GPUModelRunner(
         draft_token_ids = self.input_ids.gpu[logits_indices]
         draft_token_ids = draft_token_ids[target_logits_indices + 1]
 
+        specsteer_metadata = None
+        if include_specsteer_metadata:
+            specsteer_metadata = SpecSteerMetadata(
+                draft_token_ids=draft_token_ids,
+                num_draft_tokens=num_draft_tokens.tolist(),
+                cu_num_draft_tokens=cu_num_draft_tokens,
+                target_logits_indices=target_logits_indices,
+                base_verifier_logits=None,
+                augmented_drafter_logits=None,
+                augmented_drafter_logits_indices=target_logits_indices,
+            )
+
         return SpecDecodeMetadata(
             draft_token_ids=draft_token_ids,
             num_draft_tokens=num_draft_tokens.tolist(),
@@ -2448,6 +2471,7 @@ class GPUModelRunner(
             target_logits_indices=target_logits_indices,
             bonus_logits_indices=bonus_logits_indices,
             logits_indices=logits_indices,
+            specsteer=specsteer_metadata,
         )
 
     def _prepare_kv_sharing_fast_prefill(
@@ -3108,13 +3132,24 @@ class GPUModelRunner(
                 sampling_metadata=sampling_metadata,
             )
 
+        if self.speculative_config and self.speculative_config.method == "specsteer":
+            base_logits = getattr(self, "_specsteer_base_logits", None)
+            steer_logits = getattr(self, "_specsteer_steer_logits", None)
+            return self.specsteer_sampler(
+                metadata=spec_decode_metadata,
+                logits=logits,
+                base_logits=base_logits,
+                steer_logits=steer_logits,
+                sampling_metadata=sampling_metadata,
+            )
+
         # Update spec_token_ids with real draft tokens from pre step only when
         # output_token_ids is needed (penalties or bad_words are in use).
         if self.use_async_scheduling and self._draft_token_req_ids is not None:
             draft_token_ids_cpu, _ = self._get_draft_token_ids_cpu()
             self.input_batch.update_async_spec_token_ids(draft_token_ids_cpu)
 
-        sampler_output = self.rejection_sampler(
+        sampler_output = self.spec_decode_sampler(
             spec_decode_metadata,
             None,  # draft_probs
             logits,
@@ -5405,7 +5440,7 @@ class GPUModelRunner(
                 device=self.device,
                 dtype=logits.dtype,
             )
-            self.rejection_sampler(
+            self.spec_decode_sampler(
                 dummy_spec_decode_metadata,
                 draft_probs,
                 logits,
