@@ -8,17 +8,21 @@ import torch
 
 @dataclass
 class SpecSteerMetadata:
-    # [num_tokens]
+    # Strict contract: 1-D int tensor with shape [num_tokens], where
+    # num_tokens == int(cu_num_draft_tokens[-1]) == sum(num_draft_tokens).
     draft_token_ids: torch.Tensor
     # [batch_size]
     num_draft_tokens: list[int]
     # [batch_size]
     cu_num_draft_tokens: torch.Tensor
-    # [num_tokens]
+    # Strict contract: 1-D int tensor with shape [num_tokens]. Each index must
+    # point to the target model logits row corresponding to draft_token_ids.
     target_logits_indices: torch.Tensor
-    # [num_tokens, vocab_size]
+    # Strict contract: 2-D float tensor with shape [num_tokens, vocab_size_aux].
+    # The first dimension must exactly match draft_token_ids.shape[0].
     base_verifier_logits: torch.Tensor | None = None
-    # [num_tokens, vocab_size] or [batch_size, vocab_size]
+    # Strict contract: 2-D float tensor with shape [num_tokens, vocab_size_aux].
+    # The first dimension must exactly match draft_token_ids.shape[0].
     augmented_drafter_logits: torch.Tensor | None = None
     # [num_tokens] or [batch_size]
     augmented_drafter_logits_indices: torch.Tensor | None = None
