@@ -160,6 +160,28 @@ def test_spec_decode_smoke_e2e_no_crash_and_non_empty_output():
     assert len(outputs[0].outputs[0].token_ids) > 0
 
 
+def test_spec_decode_smoke_e2e_defaults_draft_prompt_in_request_flow():
+    llm = LLM(
+        model="hmellor/tiny-random-LlamaForCausalLM",
+        enforce_eager=True,
+        speculative_config={
+            "method": "specsteer",
+            "model": "hmellor/tiny-random-LlamaForCausalLM",
+            "base_model": "hmellor/tiny-random-LlamaForCausalLM",
+            "num_speculative_tokens": 2,
+        },
+    )
+
+    outputs = llm.generate(
+        [{"prompt": "Give one short adjective."}],
+        SamplingParams(temperature=0, max_tokens=4),
+    )
+
+    assert outputs
+    assert outputs[0].outputs
+    assert len(outputs[0].outputs[0].token_ids) > 0
+
+
 def test_spec_decode_smoke_e2e_rejects_non_greedy_sampling():
     llm = LLM(
         model="hmellor/tiny-random-LlamaForCausalLM",
