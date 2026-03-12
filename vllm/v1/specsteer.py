@@ -352,6 +352,21 @@ def get_vocab_aligner(args) -> VocabAligner:
     _ = getattr(args, "vocab_align_method", "pad_truncate")
     return PadTruncateVocabAligner(pad_value=-float("inf"))
 
+
+def ensure_greedy_only(generation_config) -> None:
+    """SpecSteer currently supports greedy decoding only."""
+    if getattr(generation_config, "do_sample", False):
+        raise ValueError("SpecSteer only supports greedy decoding (do_sample=False).")
+
+    temperature = getattr(generation_config, "temperature", None)
+    if temperature is not None and float(temperature) != 0.0:
+        raise ValueError("SpecSteer requires greedy decoding with temperature=0.")
+
+
+def resolve_draft_prompt(prompt: str, draft_prompt: Optional[str] = None) -> str:
+    """Use the draft prompt when provided, otherwise default to prompt."""
+    return prompt if draft_prompt is None else draft_prompt
+
 # =======================================================
 # 3. 核心解码逻辑 (Single Draft, Dual Verify)
 # =======================================================
@@ -378,6 +393,8 @@ def _context_assisted_decoding(
     if model_kwargs_main is None: model_kwargs_main = {}
     if model_kwargs_asst is None: model_kwargs_asst = {}
     if max_length is None: max_length = generation_config.max_length
+
+    ensure_greedy_only(generation_config)
 
     # 核心超参 gamma
     gamma = getattr(args, 'gamma', 0.6)
@@ -680,4 +697,3 @@ if __name__ == "__main__":
 
     print("\n===== Decoded Output =====")
     print(tokenizer.decode(out_ids[0], skip_special_tokens=True))
-
