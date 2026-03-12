@@ -4012,6 +4012,7 @@ class GPUModelRunner(
                     spec_decode_metadata,
                     spec_decode_common_attn_metadata,
                     slot_mappings,
+                    accepted_draft_token_counts=sampler_output.accepted_draft_token_counts,
                 )
                 self._copy_draft_token_ids_to_cpu(scheduler_output)
 
@@ -4294,6 +4295,26 @@ class GPUModelRunner(
         sampled_count_event.synchronize()
         return counts_cpu[: prev_sampled_token_ids.shape[0]].tolist()
 
+    @staticmethod
+    def _specsteer_verified_valid_counts(
+        accepted_draft_token_counts: torch.Tensor,
+        num_draft_tokens: list[int],
+    ) -> torch.Tensor:
+        """Return per-request valid counts for verifier-cache bookkeeping.
+
+        Keep speculative-verified cache through context + accepted draft tokens
+        only (exclude recovery / bonus tokens).
+        """
+        valid_counts = accepted_draft_token_counts.to(dtype=torch.int32).clone()
+        if num_draft_tokens:
+            max_counts = torch.tensor(
+                num_draft_tokens,
+                dtype=torch.int32,
+                device=valid_counts.device,
+            )
+            valid_counts = torch.minimum(valid_counts, max_counts)
+        return valid_counts
+
     def propose_draft_token_ids(
         self,
         scheduler_output: "SchedulerOutput",
@@ -4305,6 +4326,7 @@ class GPUModelRunner(
         spec_decode_metadata: SpecDecodeMetadata | None,
         common_attn_metadata: CommonAttentionMetadata,
         slot_mappings: dict[str, torch.Tensor] | list[dict[str, torch.Tensor]] | None,
+        accepted_draft_token_counts: torch.Tensor | None = None,
     ) -> list[list[int]] | torch.Tensor:
         num_scheduled_tokens = scheduler_output.total_num_scheduled_tokens
         spec_config = self.speculative_config
@@ -4516,6 +4538,15 @@ class GPUModelRunner(
                     else:
                         target_hidden_states = hidden_states[token_indices]
                 else:
+                    valid_counts_for_prepare = valid_sampled_tokens_count
+                    if (
+                        spec_config.use_specsteer()
+                        and accepted_draft_token_counts is not None
+                    ):
+                        valid_counts_for_prepare = self._specsteer_verified_valid_counts(
+                            accepted_draft_token_counts,
+                            spec_decode_metadata.num_draft_tokens,
+                        )
                     (
                         common_attn_metadata,
                         token_indices_to_sample,
@@ -4523,7 +4554,7 @@ class GPUModelRunner(
                     ) = self.drafter.prepare_inputs_padded(
                         common_attn_metadata,
                         spec_decode_metadata,
-                        valid_sampled_tokens_count,
+                        valid_counts_for_prepare,
                     )
                     total_num_tokens = common_attn_metadata.num_actual_tokens
                     # When padding the batch, token_indices is just a range

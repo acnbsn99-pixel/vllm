@@ -123,6 +123,10 @@ class SamplerOutput:
     # PLACEHOLDER_TOKEN_ID (-1 by default) is used for padding.
     sampled_token_ids: torch.Tensor
     logprobs_tensors: LogprobsTensors | None
+    # Optional per-request count of accepted draft tokens.
+    # This is currently populated by SpecSteer and used by speculative
+    # bookkeeping to keep verifier KV only through accepted draft tokens.
+    accepted_draft_token_counts: torch.Tensor | None = None
 
 
 T = TypeVar("T")
