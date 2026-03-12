@@ -1304,3 +1304,27 @@ def test_cudagraph_sizes_capped_for_mamba_cache():
             compilation_config.cudagraph_capture_sizes[-1]
             == compilation_config.max_cudagraph_capture_size
         )
+
+
+def test_specsteer_verified_valid_counts_tracks_accepted_prefix() -> None:
+    accepted_draft_counts = torch.tensor([0, 2, 4], dtype=torch.int32)
+    num_draft_tokens = [4, 4, 4]
+
+    valid_counts = GPUModelRunner._specsteer_verified_valid_counts(
+        accepted_draft_counts,
+        num_draft_tokens,
+    )
+
+    assert valid_counts.tolist() == [0, 2, 4]
+
+
+def test_specsteer_verified_valid_counts_clamps_to_draft_len() -> None:
+    accepted_draft_counts = torch.tensor([5, 1], dtype=torch.int32)
+    num_draft_tokens = [3, 2]
+
+    valid_counts = GPUModelRunner._specsteer_verified_valid_counts(
+        accepted_draft_counts,
+        num_draft_tokens,
+    )
+
+    assert valid_counts.tolist() == [3, 1]

@@ -91,6 +91,9 @@ class SpecSteerSampler(nn.Module):
             dtype=torch.int32,
             device=logits.device,
         )
+        accepted_draft_token_counts = torch.empty(
+            len(metadata.num_draft_tokens), dtype=torch.int32, device=logits.device
+        )
 
         for req_idx, req_len in enumerate(metadata.num_draft_tokens):
             start = (
@@ -113,9 +116,12 @@ class SpecSteerSampler(nn.Module):
                     break
 
             if accepted_all:
+                accepted_draft_token_counts[req_idx] = req_len
                 if self.enable_bonus_token:
                     output_token_ids[req_idx, req_len] = bonus_token_ids[req_idx]
                 continue
+
+            accepted_draft_token_counts[req_idx] = reject_pos
 
             fused_logits = self._fuse_logits(
                 target_logits[start + reject_pos : start + reject_pos + 1],
@@ -125,7 +131,11 @@ class SpecSteerSampler(nn.Module):
             recovered_token = fused_logits.argmax(dim=-1).to(torch.int32)
             output_token_ids[req_idx, reject_pos] = recovered_token[0]
 
-        return SamplerOutput(sampled_token_ids=output_token_ids, logprobs_tensors=None)
+        return SamplerOutput(
+            sampled_token_ids=output_token_ids,
+            logprobs_tensors=None,
+            accepted_draft_token_counts=accepted_draft_token_counts,
+        )
 
     def _fuse_logits(
         self,
